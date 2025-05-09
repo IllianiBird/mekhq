@@ -2030,7 +2030,7 @@ public class PersonnelTableMouseAdapter extends JPopupMenuAdapter {
             }
         }
 
-        final PersonnelRole[] roles = PersonnelRole.values();
+        final PersonnelRole[] roles = PersonnelRole.getValuesSortedAlphabetically();
 
         menu = new JMenu(resources.getString("changePrimaryRole.text"));
         JMenu menuCombatPrimary = new JMenu(resources.getString("changeRole.combat"));

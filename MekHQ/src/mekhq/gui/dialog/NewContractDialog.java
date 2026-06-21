@@ -318,7 +318,7 @@ public class NewContractDialog extends JDialog {
         gridBagConstraints.insets = new Insets(5, 5, 5, 5);
         descPanel.add(lblEmployer, gridBagConstraints);
 
-        txtEmployer.setText(contract.getEmployerName());
+        txtEmployer.setText(contract.getEmployerNameDirect());
         txtEmployer.setName("txtEmployer");
         gridBagConstraints = new GridBagConstraints();
         gridBagConstraints.gridx = 1;
@@ -406,7 +406,7 @@ public class NewContractDialog extends JDialog {
         spnMultiplier.addChangeListener(contractUpdateChangeListener);
 
         DefaultComboBoxModel<String> overheadModel = new DefaultComboBoxModel<>();
-        for (int i = 0; i < Contract.OH_NUM; i++) {
+        for (int i = 0; i < Contract.OVERHEAD_COMPENSATION_OPTION_COUNT; i++) {
             overheadModel.addElement(Contract.getOverheadCompensationName(i));
         }
         choiceOverhead = new JComboBox<>(overheadModel);

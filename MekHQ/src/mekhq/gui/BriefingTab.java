@@ -2179,7 +2179,7 @@ public final class BriefingTab extends CampaignGuiTab {
             opForFactionCode = (atbContract.getEnemyCode().isBlank()) ? opForFactionCode : atbContract.getEnemyCode();
             opForQuality = atbContract.getEnemyQuality();
             allyFactionCodes.add(atbContract.getEmployerCode());
-            allyFaction = atbContract.getEmployerName(allowedYear);
+            allyFaction = atbContract.getEmployerNameFromFaction(allowedYear);
         } else {
             allyFactionCodes.add(allyFaction);
         }
@@ -2369,7 +2369,7 @@ public final class BriefingTab extends CampaignGuiTab {
             // Export allies
             chosen.clear();
             chosen.addAll(((AtBScenario) scenario).getAlliesPlayer());
-            file = determineMULFilePath(scenario, ((AtBContract) mission).getEmployerName());
+            file = determineMULFilePath(scenario, ((AtBContract) mission).getEmployerNameDirect());
 
             int genericBattleValue = calculateGenericBattleValue(chosen);
 

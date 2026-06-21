@@ -63,9 +63,9 @@ import mekhq.campaign.enums.DragoonRating;
 import mekhq.campaign.force.CombatTeam;
 import mekhq.campaign.force.Formation;
 import mekhq.campaign.market.enums.ContractMarketMethod;
+import mekhq.campaign.mission.AbstractMissionTransition;
 import mekhq.campaign.mission.AtBContract;
 import mekhq.campaign.mission.Contract;
-import mekhq.campaign.mission.Mission;
 import mekhq.campaign.mission.enums.AtBContractType;
 import mekhq.campaign.mission.enums.CombatRole;
 import mekhq.campaign.mission.enums.ContractCommandRights;
@@ -879,7 +879,7 @@ public abstract class AbstractContractMarket {
                 if (wn2.getNodeName().equalsIgnoreCase("lastId")) {
                     retVal.lastId = Integer.parseInt(wn2.getTextContent());
                 } else if (wn2.getNodeName().equalsIgnoreCase("mission")) {
-                    Mission m = Mission.generateInstanceFromXML(wn2, c, version);
+                    AbstractMissionTransition m = AbstractMissionTransition.generateInstanceFromXML(wn2, c, version);
 
                     if (m instanceof Contract) {
                         retVal.contracts.add((Contract) m);

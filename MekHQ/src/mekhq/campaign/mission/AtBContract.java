@@ -33,7 +33,6 @@
  */
 package mekhq.campaign.mission;
 
-import static java.lang.Math.ceil;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.lang.Math.round;
@@ -49,6 +48,7 @@ import static mekhq.campaign.force.CombatTeam.getStandardFormationSize;
 import static mekhq.campaign.force.FormationLevel.BATTALION;
 import static mekhq.campaign.force.FormationLevel.COMPANY;
 import static mekhq.campaign.mission.ContractDifficulty.calculateContractDifficulty;
+import static mekhq.campaign.mission.RandomFactionCamouflage.pickRandomCamouflage;
 import static mekhq.campaign.mission.enums.AtBMoraleLevel.ADVANCING;
 import static mekhq.campaign.mission.enums.AtBMoraleLevel.DOMINATING;
 import static mekhq.campaign.mission.enums.AtBMoraleLevel.OVERWHELMING;
@@ -59,22 +59,15 @@ import static mekhq.campaign.universe.Faction.PIRATE_FACTION_CODE;
 import static mekhq.utilities.MHQInternationalization.getFormattedTextAt;
 import static mekhq.utilities.MHQInternationalization.getTextAt;
 
-import java.io.IOException;
 import java.io.PrintWriter;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.text.ParseException;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Random;
-import java.util.stream.Stream;
 
 import megamek.Version;
 import megamek.common.annotations.Nullable;
 import megamek.common.enums.Gender;
-import megamek.common.icons.Camouflage;
 import megamek.logging.MMLogger;
 import mekhq.MekHQ;
 import mekhq.campaign.Campaign;
@@ -86,7 +79,6 @@ import mekhq.campaign.market.enums.UnitMarketType;
 import mekhq.campaign.mission.atb.AtBScenarioFactory;
 import mekhq.campaign.mission.enums.AtBContractType;
 import mekhq.campaign.mission.enums.AtBMoraleLevel;
-import mekhq.campaign.mission.enums.ContractCommandRights;
 import mekhq.campaign.mission.utilities.ContractUtilities;
 import mekhq.campaign.personnel.Person;
 import mekhq.campaign.personnel.backgrounds.BackgroundsController;
@@ -127,7 +119,6 @@ public class AtBContract extends Contract {
 
     protected int playerMinorBreaches;
     protected int employerMinorBreaches;
-    protected int contractScoreArbitraryModifier;
 
     protected int moraleMod = 0;
 
@@ -165,84 +156,25 @@ public class AtBContract extends Contract {
         nextWeekBattleTypeMod = 0;
     }
 
+    @Override
     public void initContractDetails(Campaign campaign) {
         int companySize = getStandardFormationSize(campaign.getFaction(), COMPANY.getDepth());
         int battalionSize = getStandardFormationSize(campaign.getFaction(), BATTALION.getDepth());
 
         if (ContractUtilities.getEffectiveNumUnits(campaign) <= companySize) {
-            setOverheadCompensation(OH_FULL);
+            setOverheadCompensation(OVERHEAD_COMPENSATION_FULL);
         } else if (ContractUtilities.getEffectiveNumUnits(campaign) <= battalionSize) {
-            setOverheadCompensation(OH_HALF);
+            setOverheadCompensation(OVERHEAD_COMPENSATION_OH_HALF);
         } else {
-            setOverheadCompensation(OH_NONE);
+            setOverheadCompensation(OVERHEAD_COMPENSATION_NONE);
         }
 
         int currentYear = campaign.getGameYear();
-        setAllyBotName(getEmployerName(currentYear));
+        setAllyBotName(getEmployerNameFromFaction(currentYear));
         setAllyCamouflage(pickRandomCamouflage(currentYear, getEmployerCode()));
 
         setEnemyBotName(generateEnemyName(currentYear));
         setEnemyCamouflage(pickRandomCamouflage(currentYear, getEnemyCode()));
-    }
-
-    /**
-     * Selects a random camouflage for the given faction based on the faction code and year. If there are no available
-     * files in the faction directory, it logs a warning and uses default camouflage.
-     *
-     * @param currentYear the current year in the game.
-     * @param factionCode the code representing the faction for which the camouflage is to be selected.
-     */
-    public static Camouflage pickRandomCamouflage(int currentYear, String factionCode) {
-        // Define the root directory and get the faction-specific camouflage directory
-        final String ROOT_DIRECTORY = "data/images/camo/";
-
-        String camouflageDirectory = "Standard Camouflage";
-
-        if (factionCode != null) {
-            camouflageDirectory = getCamouflageDirectory(currentYear, factionCode);
-        }
-
-        // Gather all files
-        List<Path> allPaths = null;
-
-        try (Stream<Path> stream = Files.find(Paths.get(ROOT_DIRECTORY + camouflageDirectory + '/'),
-              Integer.MAX_VALUE,
-              (path, bfa) -> bfa.isRegularFile())) {
-            allPaths = stream.toList();
-        } catch (IOException e) {
-            logger.error("Error getting list of camouflages", e);
-        }
-
-        // Select a random file to set camouflage, if there are files available
-        if ((null != allPaths) && (!allPaths.isEmpty())) {
-            Path randomPath = allPaths.get(new Random().nextInt(allPaths.size()));
-
-            String fileName = randomPath.getFileName().toString();
-            String fileCategory = randomPath.getParent()
-                                        .toString()
-                                        .replaceAll("\\\\", "/"); // This is necessary for Windows machines
-            fileCategory = fileCategory.replace(ROOT_DIRECTORY, "");
-
-            return new Camouflage(fileCategory, fileName);
-        } else {
-            // Log if no files were found in the directory
-            logger.warn("No files in directory {} - using default camouflage", camouflageDirectory);
-            return new Camouflage(); // return no camouflage
-        }
-    }
-
-    /**
-     * Returns the directory for the camouflages of a faction based on the year and faction code.
-     *
-     * @param year        The year
-     * @param factionCode The code representing the faction, e.g. FS or HL
-     *
-     * @return The directory under data/images/camo for the camouflages of the faction
-     */
-    private static String getCamouflageDirectory(int year, String factionCode) {
-        return Factions.getInstance().getFaction(factionCode)
-                     .getCamosFolder(year)
-                     .orElse("Standard Camouflage");
     }
 
     public void calculateLength(final boolean variable) {
@@ -506,26 +438,6 @@ public class AtBContract extends Contract {
         return bestSite;
     }
 
-    /**
-     * Calculates the overall contract score based on scenario outcomes and modifiers.
-     *
-     * <p>For StratCon campaigns, this returns the current victory points from the campaign state.</p>
-     *
-     * <p>For standard contracts, this aggregates scores from all completed scenarios and applies any arbitrary
-     * modifiers that have been set for this contract.</p>
-     *
-     * @param isUseMaplessMode {@code true} if mapless mode is enabled in StratCon
-     *
-     * @return the total contract score, including victory points or scenario scores plus modifiers
-     */
-    public int getContractScore(boolean isUseMaplessMode) {
-        if (!isUseMaplessMode && getStratConCampaignState() != null) {
-            return getStratConCampaignState().getVictoryPoints();
-        }
-
-        return ContractScore.getContractScore(getCompletedScenarios()) + contractScoreArbitraryModifier;
-    }
-
 
     /**
      * @return the total available support points, or 0 if StratCon is not enabled for this contract
@@ -539,10 +451,6 @@ public class AtBContract extends Contract {
         }
 
         return getStratConCampaignState().getSupportPoints();
-    }
-
-    public int getContractScoreArbitraryModifier() {
-        return contractScoreArbitraryModifier;
     }
 
     /**
@@ -907,10 +815,6 @@ public class AtBContract extends Contract {
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "extensionLength", extensionLength);
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "playerMinorBreaches", playerMinorBreaches);
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "employerMinorBreaches", employerMinorBreaches);
-        MHQXMLUtility.writeSimpleXMLTag(printWriter,
-              indent,
-              "contractScoreArbitraryModifier",
-              contractScoreArbitraryModifier);
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "priorLogisticsFailure", priorLogisticsFailure);
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "battleTypeMod", battleTypeMod);
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "nextWeekBattleTypeMod", nextWeekBattleTypeMod);
@@ -940,8 +844,6 @@ public class AtBContract extends Contract {
                     playerMinorBreaches = Integer.parseInt(item.getTextContent());
                 } else if (item.getNodeName().equalsIgnoreCase("employerMinorBreaches")) {
                     employerMinorBreaches = Integer.parseInt(item.getTextContent());
-                } else if (item.getNodeName().equalsIgnoreCase("contractScoreArbitraryModifier")) {
-                    contractScoreArbitraryModifier = Integer.parseInt(item.getTextContent());
                 } else if (item.getNodeName().equalsIgnoreCase("priorLogisticsFailure")) {
                     priorLogisticsFailure = Boolean.parseBoolean(item.getTextContent());
                 } else if (item.getNodeName().equalsIgnoreCase("battleTypeMod")) {
@@ -1000,17 +902,8 @@ public class AtBContract extends Contract {
         }
     }
 
-    public Faction getEmployerFaction() {
-        return Factions.getInstance().getFaction(getEmployerCode());
-    }
-
-    public void updateEmployer(String code, int year) {
-        this.setEmployerCode(code);
-        setEmployerName(getEmployerName(year));
-        setAllyCamouflage(pickRandomCamouflage(year, getEmployerCode()));
-    }
-
-    public String getEmployerName(int year) {
+    @Override
+    public String getEmployerNameFromFaction(int year) {
         return isMercSubcontract() ?
                      "Mercenary (" + getEmployerFaction().getFullName(year) + ')' :
                      getEmployerFaction().getFullName(year);
@@ -1022,10 +915,6 @@ public class AtBContract extends Contract {
 
     public void addPlayerMinorBreaches(int num) {
         playerMinorBreaches += num;
-    }
-
-    public void setContractScoreArbitraryModifier(int newModifier) {
-        contractScoreArbitraryModifier = newModifier;
     }
 
     public int getBattleTypeMod() {
@@ -1086,7 +975,7 @@ public class AtBContract extends Contract {
         setContractTypeAndName(contractType);
 
         Faction f = Factions.getInstance()
-                          .getFactionFromFullNameAndYear(contract.getEmployerName(), campaign.getGameYear());
+                          .getFactionFromFullNameAndYear(contract.getEmployerNameDirect(), campaign.getGameYear());
         if (null == f) {
             setEmployerCode("IND");
         } else {
@@ -1107,7 +996,7 @@ public class AtBContract extends Contract {
         setPartsAvailabilityLevel(getContractType().calculatePartsAvailabilityLevel());
 
         int currentYear = campaign.getGameYear();
-        setAllyBotName(getEmployerName(currentYear));
+        setAllyBotName(getEmployerNameFromFaction(currentYear));
         setAllyCamouflage(pickRandomCamouflage(currentYear, getEmployerCode()));
 
         setEnemyBotName(generateEnemyName(currentYear));
@@ -1164,54 +1053,5 @@ public class AtBContract extends Contract {
         public AtBContractRef(int id) {
             setId(id);
         }
-    }
-
-    /**
-     * Calculates the number of required Victory Points (VP) needed to achieve overall success for this StratCon
-     * contract.
-     *
-     * <p>The calculation is based on several averaged campaign parameters:
-     * <ul>
-     *     <li><b>Base requirement</b> — Required number of combat teams multiplied by the contract length.</li>
-     *     <li><b>Scenario odds</b> — The mean scenario-odds percentage across all StratCon tracks, converted to a
-     *     probability.</li>
-     *     <li><b>Turning point chance</b> — A scaling factor based on command rights: {@code INTEGRATED} contracts
-     *     assume a 100% chance, while all others use a one-third chance.</li>
-     * </ul>
-     *
-     * <p>The final result estimates the expected number of Turning Points the player must win for overall contract
-     * success. If the player loses a handful of Turning Points, they should still be able to win the contract by
-     * being proactive in the Area of Operations.</p>
-     *
-     * @return the required number of Victory Points, rounded up to the nearest integer
-     *
-     * @author Illiani
-     * @since 0.50.10
-     */
-    public int getRequiredVictoryPoints() {
-        if (getStratConCampaignState() == null) {
-            return 0;
-        }
-
-        double baseRequirement = getRequiredCombatTeams();
-
-        int duration = getLengthInMonths();
-        if (getContractType().isGarrisonType()) {
-            duration = (int) ceil(duration * 0.75); // We assume around 25% of the contract will be peaceful
-        }
-
-        double trackCount = 0;
-        int totalScenarioOdds = 0;
-        for (StratConTrackState trackState : getStratConCampaignState().getTracks()) {
-            trackCount++;
-            totalScenarioOdds += trackState.getScenarioOdds();
-        }
-
-        double meanScenarioOdds = totalScenarioOdds / trackCount;
-        double scenarioOdds = meanScenarioOdds / 100.0;
-        double turningPointChance = (getCommandRights() == ContractCommandRights.INTEGRATED ? 1.0 : 0.33);
-
-        // This result gives us the average number of Turning Points expected for the contract
-        return (int) ceil(baseRequirement * duration * scenarioOdds * turningPointChance);
     }
 }

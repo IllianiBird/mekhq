@@ -35,6 +35,7 @@ package mekhq.campaign.mission;
 
 import java.io.PrintWriter;
 import java.text.ParseException;
+import java.time.LocalDate;
 
 import megamek.Version;
 import megamek.common.annotations.Nullable;
@@ -64,6 +65,15 @@ public class Mission extends AbstractMissionTransition {
     // endregion Constructors
 
     @Override
+    public void calculateContract(Campaign campaign) {
+    }
+
+    @Override
+    public boolean isActiveOn(LocalDate date, boolean excludeEndDateCheck) {
+        return getStatus().isActive();
+    }
+
+    @Override
     protected int writeToXMLBegin(Campaign campaign, final PrintWriter printWriter, int indent) {
         // All Mission-level fields are owned by AbstractMission.
         return super.writeToXMLBegin(campaign, printWriter, indent);
@@ -73,15 +83,6 @@ public class Mission extends AbstractMissionTransition {
     public void loadFieldsFromXmlNode(Campaign campaign, Version version, Node node) throws ParseException {
         // All Mission-level fields are parsed by AbstractMission.
         super.loadFieldsFromXmlNode(campaign, version, node);
-    }
-
-    /**
-     * @deprecated Call {@link AbstractMissionTransition#generateInstanceFromXML} directly. This delegate exists only so
-     *       that existing call sites in the campaign loader do not need to be updated immediately.
-     */
-    @Deprecated
-    public static Mission generateInstanceFromXML(Node node, Campaign campaign, Version version) {
-        return (Mission) AbstractMissionTransition.generateInstanceFromXML(node, campaign, version);
     }
 
     @Override

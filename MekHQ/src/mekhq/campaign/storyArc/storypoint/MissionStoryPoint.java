@@ -41,6 +41,7 @@ import java.util.UUID;
 import megamek.Version;
 import megamek.logging.MMLogger;
 import mekhq.campaign.Campaign;
+import mekhq.campaign.mission.AbstractMissionTransition;
 import mekhq.campaign.mission.Mission;
 import mekhq.campaign.mission.enums.MissionStatus;
 import mekhq.campaign.storyArc.StoryPoint;
@@ -182,7 +183,7 @@ public class MissionStoryPoint extends StoryPoint {
                         mission = c.getMission(missionId);
                     }
                 } else if (wn2.getNodeName().equalsIgnoreCase("mission")) {
-                    mission = Mission.generateInstanceFromXML(wn2, c, version);
+                    mission = (Mission) AbstractMissionTransition.generateInstanceFromXML(wn2, c, version);
                 } else if (wn2.getNodeName().equalsIgnoreCase("scenarioStoryPointId")) {
                     scenarioStoryPointIds.add(UUID.fromString(wn2.getTextContent().trim()));
                 } else if (wn2.getNodeName().equalsIgnoreCase("percentWin")) {

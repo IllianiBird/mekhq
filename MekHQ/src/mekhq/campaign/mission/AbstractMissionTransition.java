@@ -33,10 +33,12 @@
 package mekhq.campaign.mission;
 
 import static java.lang.Math.ceil;
+import static megamek.client.generator.RandomNameGenerator.KEY_DEFAULT_FACTION;
 import static megamek.client.ui.util.PlayerColour.BLUE;
 import static megamek.client.ui.util.PlayerColour.RED;
 import static megamek.common.enums.SkillLevel.REGULAR;
 import static megamek.common.enums.SkillLevel.parseFromString;
+import static mekhq.campaign.mission.RandomFactionCamouflage.pickRandomCamouflage;
 import static mekhq.campaign.mission.enums.AtBContractType.UNDEFINED;
 import static mekhq.campaign.mission.enums.AtBMoraleLevel.MAXIMUM_MORALE_LEVEL;
 import static mekhq.campaign.mission.enums.AtBMoraleLevel.MINIMUM_MORALE_LEVEL;
@@ -44,7 +46,6 @@ import static mekhq.campaign.mission.enums.AtBMoraleLevel.STALEMATE;
 import static mekhq.campaign.mission.enums.ContractCommandRights.INDEPENDENT;
 import static mekhq.campaign.personnel.ranks.Rank.RO_MIN;
 import static mekhq.campaign.personnel.skills.SkillType.EXP_REGULAR;
-import static mekhq.campaign.universe.Faction.INDEPENDENT_FACTION_CODE;
 import static mekhq.utilities.MHQInternationalization.getFormattedTextAt;
 import static mekhq.utilities.MHQInternationalization.getTextAt;
 
@@ -85,6 +86,7 @@ import mekhq.campaign.personnel.ranks.RankSystem;
 import mekhq.campaign.personnel.ranks.RankValidator;
 import mekhq.campaign.personnel.ranks.Ranks;
 import mekhq.campaign.stratCon.StratConCampaignState;
+import mekhq.campaign.stratCon.StratConTrackState;
 import mekhq.campaign.stratCon.SupportPointNegotiation;
 import mekhq.campaign.unit.Unit;
 import mekhq.campaign.universe.Faction;
@@ -99,46 +101,58 @@ import org.w3c.dom.NodeList;
 
 public class AbstractMissionTransition {
     private static final MMLogger LOGGER = MMLogger.create(AbstractMissionTransition.class);
-    private static final String RESOURCE_BUNDLE = "mekhq.resources.AbstractMission";
+    private static final String RESOURCE_BUNDLE = "mekhq.resources.MissionTransition";
 
-    private String name;
-    private int id = -1;
-    private StratConCampaignState stratConCampaignState;
+    private final static int NO_ID = -1;
+
+    private final static int MRBC_FEE_PERCENTAGE = 5;
+    private final static int DEFAULT_SHARES_PERCENT = 30;
+    public static final int UNKNOWN_DIFFICULTY = -99;
+
+    public final static int OVERHEAD_COMPENSATION_NONE = 0;
+    public final static int OVERHEAD_COMPENSATION_OH_HALF = 1;
+    public final static int OVERHEAD_COMPENSATION_FULL = 2;
+    public final static int OVERHEAD_COMPENSATION_OPTION_COUNT = 3;
+
+    private String name = getText("MissionTransition.contractTypeName.default");
+    private int id = NO_ID;
+    private StratConCampaignState stratConCampaignState = null;
+    private int contractScoreArbitraryModifier = 0;
     private MissionStatus status = MissionStatus.ACTIVE;
-    private String contractTypeName = getText("AbstractMission.contractTypeName.default");
+    private String contractTypeName = getText("MissionTransition.contractTypeName.default");
     private AtBContractType contractType = UNDEFINED;
-    private String description;
+    private String description = "";
 
-    private String systemId;
-    private String legacyPlanetName;
+    private String systemId = "";
+    private String legacyPlanetName = "";
     /*
      * This is a transient variable meant to keep track of a single jump path while the contract runs through initial
      * calculations, as the same jump path is referenced multiple times and calculating it each time is expensive. No
      * need to preserve it in save data.
      */
-    private transient JumpPath cachedJumpPath;
+    private transient JumpPath cachedJumpPath = new JumpPath();
 
-    private LocalDate startDate;
-    private LocalDate endingDate;
+    private LocalDate startDate = LocalDate.of(1, 1, 1);
+    private LocalDate endingDate = LocalDate.of(999999, 1, 1);
     private int lengthInMonths = 1;
 
-    private String employerCode = INDEPENDENT_FACTION_CODE;
-    private String employerName = getText("AbstractMission.belligerentName.default");
-    private Person employerLiaison;
+    private String employerCode = KEY_DEFAULT_FACTION;
+    private String employerName = getText("MissionTransition.allyBotName.default");
+    private Person employerLiaison = null;
     private SkillLevel allySkill = REGULAR;
     private int allyQuality = DragoonRating.DRAGOON_C.getRating();
-    private String allyBotName = getText("AbstractMission.allyBotName.default");
+    private String allyBotName = getText("MissionTransition.allyBotName.default");
     private Camouflage allyCamouflage = new Camouflage(Camouflage.COLOUR_CAMOUFLAGE, PlayerColour.RED.name());
     private PlayerColour allyColour = RED;
 
-    private String enemyCode = INDEPENDENT_FACTION_CODE;
-    private String enemyName = getText("AbstractMission.belligerentName.default");
-    private String enemyMercenaryEmployerCode;
-    private Person clanOpponent;
+    private String enemyCode = KEY_DEFAULT_FACTION;
+    private String enemyName = getText("MissionTransition.enemyBotName.default");
+    private String enemyMercenaryEmployerCode = null;
+    private Person clanOpponent = null;
     private boolean batchallAccepted = true;
     private SkillLevel enemySkill = REGULAR;
     private int enemyQuality = DragoonRating.DRAGOON_C.getRating();
-    private String enemyBotName = getText("AbstractMission.enemyBotName.default");
+    private String enemyBotName = getText("MissionTransition.enemyBotName.default");
     private Camouflage enemyCamouflage = new Camouflage(Camouflage.COLOUR_CAMOUFLAGE, PlayerColour.BLUE.name());
     private PlayerColour enemyColour = BLUE;
 
@@ -146,14 +160,14 @@ public class AbstractMissionTransition {
 
     private double paymentMultiplier = 1.0;
     private ContractCommandRights commandRights = INDEPENDENT;
-    private int overheadCompensation = OH_NONE;
-    private int straightSupport;
-    private int battleLossCompensation;
-    private int salvagePercent;
-    private int transportCompensation;
+    private int overheadCompensation = OVERHEAD_COMPENSATION_NONE;
+    private int straightSupport = 0;
+    private int battleLossCompensation = 0;
+    private int salvagePercent = 0;
+    private int transportCompensation = 0;
 
     // need to keep track of total value salvaged for salvage rights
-    private boolean salvageExchange;
+    private boolean salvageExchange = false;
     private Money salvagedByUnit = Money.zero();
     private Money salvagedByEmployer = Money.zero();
 
@@ -170,37 +184,28 @@ public class AbstractMissionTransition {
     private boolean paidMRBCFee = true;
     private int mrbcFeePercent = MRBC_FEE_PERCENTAGE;
     private int sharesPercent = DEFAULT_SHARES_PERCENT;
-    private int advancePercent;
-    private int signingBonus;
+    private int advancePercent = 0;
+    private int signingBonus = 0;
 
-    private int hospitalBedsRented;
-    private int kitchensRented;
-    private int holdingCellsRented;
-    private int partsAvailabilityLevel;
+    private int hospitalBedsRented = 0;
+    private int kitchensRented = 0;
+    private int holdingCellsRented = 0;
+    private int partsAvailabilityLevel = 0;
 
-    private int requiredCombatTeams;
-    private int requiredCombatElements;
+    private int requiredCombatTeams = 0;
+    private int requiredCombatElements = 0;
 
-    private boolean isPlayerAttacker;
-    private int contractNegotiationCommandRoll;
-    private int contractNegotiationSalvageRoll;
-    private int contractNegotiationSupportRoll;
-    private int contractNegotiationTransportRoll;
+    private boolean isPlayerAttacker = false;
+    private int contractNegotiationCommandRoll = 0;
+    private int contractNegotiationSalvageRoll = 0;
+    private int contractNegotiationSupportRoll = 0;
+    private int contractNegotiationTransportRoll = 0;
 
     private AtBMoraleLevel moraleLevel = STALEMATE;
-    private LocalDate routEndDate;
-    private Money routedPayout = null;
+    private LocalDate routEndDate = null;
+    private Money routedPayout = Money.zero();
 
     private final List<Scenario> scenarios = new ArrayList<>();
-
-    private final static int MRBC_FEE_PERCENTAGE = 5;
-    private final static int DEFAULT_SHARES_PERCENT = 30;
-    public static final int UNKNOWN_DIFFICULTY = -99;
-
-    public final static int OH_NONE = 0;
-    public final static int OH_HALF = 1;
-    public final static int OH_FULL = 2;
-    public final static int OH_NUM = 3;
 
     public AbstractMissionTransition() {}
 
@@ -253,7 +258,7 @@ public class AbstractMissionTransition {
         return getSystem().getName(when);
     }
 
-    public @Nullable JumpPath getCachedJumpPath() {
+    public JumpPath getCachedJumpPath() {
         return cachedJumpPath;
     }
 
@@ -265,7 +270,7 @@ public class AbstractMissionTransition {
      * Gets the currently calculated jump path for this contract, only recalculating if it's not valid any longer or
      * hasn't been calculated yet.
      */
-    public @Nullable JumpPath getJumpPath(Campaign campaign) {
+    public JumpPath getJumpPath(Campaign campaign) {
         // if we don't have a cached jump path, or if the jump path's starting/ending point no longer match the
         // campaign's current location or contract's destination
         if ((getCachedJumpPath() == null) || getCachedJumpPath().isEmpty()
@@ -290,7 +295,12 @@ public class AbstractMissionTransition {
     }
 
     public boolean isActiveOn(LocalDate date, boolean excludeEndDateCheck) {
-        return getStatus().isActive();
+        boolean isBeforeStartDate = getStartDate() != null && date.isBefore(getStartDate());
+        boolean isAfterEndDate = getEndingDate() != null && date.isAfter(getEndingDate());
+
+        return getStatus().isActive() &&
+                     !isBeforeStartDate &&
+                     (excludeEndDateCheck || !isAfterEndDate);
     }
 
     /**
@@ -371,19 +381,19 @@ public class AbstractMissionTransition {
         return monthsLeft;
     }
 
-    public @Nullable LocalDate getEndingDate() {
+    public LocalDate getEndingDate() {
         return endingDate;
     }
 
-    public void setEndingDate(@Nullable LocalDate endDate) {
+    public void setEndingDate(LocalDate endDate) {
         this.endingDate = endDate;
     }
 
-    public @Nullable LocalDate getStartDate() {
+    public LocalDate getStartDate() {
         return startDate;
     }
 
-    public void setStartDate(@Nullable LocalDate startDate) {
+    public void setStartDate(LocalDate startDate) {
         this.startDate = startDate;
     }
 
@@ -398,8 +408,12 @@ public class AbstractMissionTransition {
         this.endingDate = startDate.plusMonths(getLengthInMonths());
     }
 
-    public String getEmployerName() {
+    public String getEmployerNameDirect() {
         return employerName;
+    }
+
+    public String getEmployerNameFromFaction(int year) {
+        return getEmployerFaction().getFullName(year);
     }
 
     public void setEmployerName(String employerName) {
@@ -500,12 +514,22 @@ public class AbstractMissionTransition {
         this.enemyColour = enemyColour;
     }
 
-    public @Nullable String getEmployerCode() {
+    public String getEmployerCode() {
         return employerCode;
     }
 
     public void setEmployerCode(String employerCode) {
         this.employerCode = employerCode;
+    }
+
+    public Faction getEmployerFaction() {
+        return Factions.getInstance().getFaction(getEmployerCode());
+    }
+
+    public void updateEmployer(String code, int year) {
+        this.setEmployerCode(code);
+        setEmployerName(getEmployerNameFromFaction(year));
+        setAllyCamouflage(pickRandomCamouflage(year, getEmployerCode()));
     }
 
     public String getEnemyCode() {
@@ -757,12 +781,20 @@ public class AbstractMissionTransition {
         this.id = id;
     }
 
-    public StratConCampaignState getStratConCampaignState() {
+    public @Nullable StratConCampaignState getStratConCampaignState() {
         return stratConCampaignState;
     }
 
-    public void setStratConCampaignState(StratConCampaignState stratConCampaignState) {
+    public void setStratConCampaignState(@Nullable StratConCampaignState stratConCampaignState) {
         this.stratConCampaignState = stratConCampaignState;
+    }
+
+    public int getContractScoreArbitraryModifier() {
+        return contractScoreArbitraryModifier;
+    }
+
+    public void setContractScoreArbitraryModifier(int contractScoreArbitraryModifier) {
+        this.contractScoreArbitraryModifier = contractScoreArbitraryModifier;
     }
 
     public String getLegacyPlanetName() {
@@ -867,9 +899,9 @@ public class AbstractMissionTransition {
 
     public static String getOverheadCompensationName(int i) {
         return switch (i) {
-            case OH_NONE -> "None";
-            case OH_HALF -> "Half";
-            case OH_FULL -> "Full";
+            case OVERHEAD_COMPENSATION_NONE -> "None";
+            case OVERHEAD_COMPENSATION_OH_HALF -> "Half";
+            case OVERHEAD_COMPENSATION_FULL -> "Full";
             default -> "?";
         };
     }
@@ -1250,7 +1282,112 @@ public class AbstractMissionTransition {
      *
      * @param campaign current campaign
      */
+
     public void calculateContract(Campaign campaign) {
+        Accountant accountant = campaign.getAccountant();
+
+        // calculate base amount
+        setBaseAmount(accountant.getContractBase()
+                            .multipliedBy(getLengthInMonths())
+                            .multipliedBy(getPaymentMultiplier()));
+
+        // calculate overhead
+        switch (getOverheadCompensation()) {
+            case OVERHEAD_COMPENSATION_OH_HALF:
+                setOverheadAmount(accountant.getOverheadExpenses()
+                                        .multipliedBy(getLengthInMonths())
+                                        .multipliedBy(0.5));
+                break;
+            case OVERHEAD_COMPENSATION_FULL:
+                setOverheadAmount(accountant.getOverheadExpenses().multipliedBy(getLengthInMonths()));
+                break;
+            default:
+                setOverheadAmount(Money.zero());
+        }
+
+        // calculate support amount
+        if (campaign.getCampaignOptions().isUsePeacetimeCost()) {
+            setSupportAmount(accountant.getPeacetimeCost()
+                                   .multipliedBy(getLengthInMonths())
+                                   .multipliedBy(getStraightSupport())
+                                   .dividedBy(100));
+        } else {
+            Money maintCosts = campaign.getAllHangar().getUnitCosts(u -> !u.isConventionalInfantry(),
+                  Unit::getWeeklyMaintenanceCost);
+            maintCosts = maintCosts.multipliedBy(4);
+            setSupportAmount(maintCosts
+                                   .multipliedBy(getLengthInMonths())
+                                   .multipliedBy(getStraightSupport())
+                                   .dividedBy(100));
+        }
+
+        // calculate employer's transport reimbursement (this is income - what they pay you toward transport)
+        // The full transport cost will be subtracted in getEstimatedTotalProfit()
+        if (null != getSystem() && campaign.getCampaignOptions().isPayForTransport()) {
+            setTransportAmount(getEmployerTransportReimbursement(campaign));
+        } else {
+            setTransportAmount(Money.zero());
+        }
+
+        // calculate transit amount for CO
+        if (campaign.getCampaignOptions().isUsePeacetimeCost()) {
+            // contract base * transport period * reputation * employer modifier
+
+            boolean useTwoWayPay = campaign.getCampaignOptions().isUseTwoWayPay();
+            setTransitAmount(accountant.getContractBase()
+                                   .multipliedBy(((getJumpPath(campaign).getJumps()) * (useTwoWayPay ? 2.0 : 1.0)) /
+                                                       4.0)
+                                   .multipliedBy(campaign.getAtBUnitRatingMod() * 0.2 + 0.5)
+                                   .multipliedBy(1.2));
+        } else {
+            setTransitAmount(Money.zero());
+        }
+
+        setSigningBonusAmount(getBaseAmount()
+                                    .plus(getOverheadAmount())
+                                    .plus(getTransportAmount())
+                                    .plus(getTransitAmount())
+                                    .plus(getSupportAmount())
+                                    .multipliedBy(getSigningBonus())
+                                    .dividedBy(100));
+
+        if (isPaidMRBCFee()) {
+            setFeeAmount(getBaseAmount()
+                               .plus(getOverheadAmount())
+                               .plus(getTransportAmount())
+                               .plus(getTransitAmount())
+                               .plus(getSupportAmount())
+                               .multipliedBy(getMRBCFeePercentage())
+                               .dividedBy(100));
+        } else {
+            setFeeAmount(Money.zero());
+        }
+
+        setAdvanceAmount(getTotalAmountPlusFees()
+                               .multipliedBy(getAdvancePercent())
+                               .dividedBy(100));
+
+        // only adjust the start date for travel if the start date is currently null
+        boolean adjustStartDate = false;
+        LocalDate startDate = getStartDate();
+        if (startDate == null) {
+            startDate = campaign.getLocalDate();
+            adjustStartDate = true;
+        }
+
+        if (adjustStartDate && (campaign.getSystemByName(getSystemId()) != null)) {
+            boolean isUseCommandCircuit =
+                  FactionStandingUtilities.isUseCommandCircuit(campaign.isOverridingCommandCircuitRequirements(),
+                        campaign.isGM(),
+                        campaign.getCampaignOptions().isUseFactionStandingCommandCircuitSafe(),
+                        campaign.getFactionStandings(), campaign.getFutureAtBContracts());
+
+            int days = (int) ceil(getJumpPath(campaign).getTotalTime(campaign.getLocalDate(),
+                  campaign.getCurrentLocation().getTransitTime(), isUseCommandCircuit));
+            startDate = startDate.plusDays(days);
+        }
+
+        setStartAndEndDate(startDate);
     }
 
     public int getHospitalBedsRented() {
@@ -1382,11 +1519,11 @@ public class AbstractMissionTransition {
         return getContractType().isGarrisonType() && getMoraleLevel().isRouted();
     }
 
-    public @Nullable Money getRoutedPayout() {
+    public Money getRoutedPayout() {
         return routedPayout;
     }
 
-    public void setRoutedPayout(@Nullable Money routedPayout) {
+    public void setRoutedPayout(Money routedPayout) {
         this.routedPayout = routedPayout;
     }
 
@@ -1399,11 +1536,83 @@ public class AbstractMissionTransition {
         return Unit.SITE_FACILITY_BASIC;
     }
 
+
+    /**
+     * Calculates the number of required Victory Points (VP) needed to achieve overall success for this StratCon
+     * contract.
+     *
+     * <p>The calculation is based on several averaged campaign parameters:
+     * <ul>
+     *     <li><b>Base requirement</b> — Required number of combat teams multiplied by the contract length.</li>
+     *     <li><b>Scenario odds</b> — The mean scenario-odds percentage across all StratCon tracks, converted to a
+     *     probability.</li>
+     *     <li><b>Turning point chance</b> — A scaling factor based on command rights: {@code INTEGRATED} contracts
+     *     assume a 100% chance, while all others use a one-third chance.</li>
+     * </ul>
+     *
+     * <p>The final result estimates the expected number of Turning Points the player must win for overall contract
+     * success. If the player loses a handful of Turning Points, they should still be able to win the contract by
+     * being proactive in the Area of Operations.</p>
+     *
+     * @return the required number of Victory Points, rounded up to the nearest integer
+     *
+     * @author Illiani
+     * @since 0.50.10
+     */
+    public int getRequiredVictoryPoints() {
+        if (getStratConCampaignState() == null) {
+            return 0;
+        }
+
+        double baseRequirement = getRequiredCombatTeams();
+
+        int duration = getLengthInMonths();
+        if (getContractType().isGarrisonType()) {
+            duration = (int) ceil(duration * 0.75); // We assume around 25% of the contract will be peaceful
+        }
+
+        double trackCount = 0;
+        int totalScenarioOdds = 0;
+        for (StratConTrackState trackState : getStratConCampaignState().getTracks()) {
+            trackCount++;
+            totalScenarioOdds += trackState.getScenarioOdds();
+        }
+
+        double meanScenarioOdds = totalScenarioOdds / trackCount;
+        double scenarioOdds = meanScenarioOdds / 100.0;
+        double turningPointChance = (getCommandRights() == ContractCommandRights.INTEGRATED ? 1.0 : 0.33);
+
+        // This result gives us the average number of Turning Points expected for the contract
+        return (int) ceil(baseRequirement * duration * scenarioOdds * turningPointChance);
+    }
+
+    /**
+     * Calculates the overall contract score based on scenario outcomes and modifiers.
+     *
+     * <p>For StratCon campaigns, this returns the current victory points from the campaign state.</p>
+     *
+     * <p>For standard contracts, this aggregates scores from all completed scenarios and applies any arbitrary
+     * modifiers that have been set for this contract.</p>
+     *
+     * @param isUseMaplessMode {@code true} if mapless mode is enabled in StratCon
+     *
+     * @return the total contract score, including victory points or scenario scores plus modifiers
+     */
+    public int getContractScore(boolean isUseMaplessMode) {
+        if (!isUseMaplessMode && getStratConCampaignState() != null) {
+            return getStratConCampaignState().getVictoryPoints();
+        }
+
+        return ContractScore.getContractScore(getCompletedScenarios()) + contractScoreArbitraryModifier;
+    }
+
     /**
      * Calculations to be performed once the contract has been accepted.
      */
     public void acceptContract(Campaign campaign) {
     }
+
+    public void initContractDetails(Campaign campaign) {}
 
     public void writeToXML(Campaign campaign, final PrintWriter printWriter, int indent) {
         indent = writeToXMLBegin(campaign, printWriter, indent);
@@ -1440,7 +1649,7 @@ public class AbstractMissionTransition {
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "nMonths", getLengthInMonths());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "startDate", getStartDate());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "endDate", getEndingDate());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "employer", getEmployerName());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "employer", getEmployerNameDirect());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "paymentMultiplier", getPaymentMultiplier());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "commandRights", getCommandRights().name());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "overheadComp", getOverheadCompensation());
@@ -1511,9 +1720,7 @@ public class AbstractMissionTransition {
         if (getRoutEndDate() != null) {
             MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "routEnd", getRoutEndDate());
         }
-        if (getRoutedPayout() != null) {
-            MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "routedPayout", getRoutedPayout());
-        }
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "routedPayout", getRoutedPayout());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "partsAvailabilityLevel", getPartsAvailabilityLevel());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "sharesPct", getSharesPercent());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "batchallAccepted", isBatchallAccepted());
@@ -1528,6 +1735,10 @@ public class AbstractMissionTransition {
         if (getStratConCampaignState() != null) {
             getStratConCampaignState().Serialize(printWriter);
         }
+        MHQXMLUtility.writeSimpleXMLTag(printWriter,
+              indent,
+              "contractScoreArbitraryModifier",
+              getContractScoreArbitraryModifier());
 
         // NPCs
         if (getEmployerLiaison() != null) {
@@ -1731,6 +1942,8 @@ public class AbstractMissionTransition {
                     // AtBContract.loadFieldsFromXmlNode after super returns.
                 } else if (nodeName.equalsIgnoreCase(StratConCampaignState.ROOT_XML_ELEMENT_NAME)) {
                     setStratConCampaignState(StratConCampaignState.Deserialize(item));
+                } else if (nodeName.equalsIgnoreCase("contractScoreArbitraryModifier")) {
+                    setContractScoreArbitraryModifier(Integer.parseInt(value));
 
                     // NPCs
                 } else if (nodeName.equalsIgnoreCase("employerLiaison")) {
@@ -1771,7 +1984,7 @@ public class AbstractMissionTransition {
     public String toString() {
         return !getStatus().isCompleted() ?
                      getName() :
-                     getFormattedTextAt(RESOURCE_BUNDLE, "AbstractMission.name.completed", getName());
+                     getFormattedTextAt(RESOURCE_BUNDLE, "MissionTransition.name.completed", getName());
     }
 
     private static String getText(String resourceKey) {

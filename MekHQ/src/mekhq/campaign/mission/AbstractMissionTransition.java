@@ -101,7 +101,7 @@ import org.w3c.dom.NodeList;
 
 public class AbstractMissionTransition {
     private static final MMLogger LOGGER = MMLogger.create(AbstractMissionTransition.class);
-    private static final String RESOURCE_BUNDLE = "mekhq.resources.MissionTransition";
+    private static final String RESOURCE_BUNDLE = "mekhq.resources.AbstractMissionTransition";
 
     private final static int NO_ID = -1;
 
@@ -114,12 +114,12 @@ public class AbstractMissionTransition {
     public final static int OVERHEAD_COMPENSATION_FULL = 2;
     public final static int OVERHEAD_COMPENSATION_OPTION_COUNT = 3;
 
-    private String name = getText("MissionTransition.contractTypeName.default");
+    private String name = getText("AbstractMissionTransition.contractTypeName.default");
     private int id = NO_ID;
     private StratConCampaignState stratConCampaignState = null;
     private int contractScoreArbitraryModifier = 0;
     private MissionStatus status = MissionStatus.ACTIVE;
-    private String contractTypeName = getText("MissionTransition.contractTypeName.default");
+    private String contractTypeName = getText("AbstractMissionTransition.contractTypeName.default");
     private AtBContractType contractType = UNDEFINED;
     private String description = "";
 
@@ -137,22 +137,22 @@ public class AbstractMissionTransition {
     private int lengthInMonths = 1;
 
     private String employerCode = KEY_DEFAULT_FACTION;
-    private String employerName = getText("MissionTransition.allyBotName.default");
+    private String employerName = getText("AbstractMissionTransition.allyBotName.default");
     private Person employerLiaison = null;
     private SkillLevel allySkill = REGULAR;
     private int allyQuality = DragoonRating.DRAGOON_C.getRating();
-    private String allyBotName = getText("MissionTransition.allyBotName.default");
+    private String allyBotName = getText("AbstractMissionTransition.allyBotName.default");
     private Camouflage allyCamouflage = new Camouflage(Camouflage.COLOUR_CAMOUFLAGE, PlayerColour.RED.name());
     private PlayerColour allyColour = RED;
 
     private String enemyCode = KEY_DEFAULT_FACTION;
-    private String enemyName = getText("MissionTransition.enemyBotName.default");
+    private String enemyName = getText("AbstractMissionTransition.enemyBotName.default");
     private String enemyMercenaryEmployerCode = null;
     private Person clanOpponent = null;
     private boolean batchallAccepted = true;
     private SkillLevel enemySkill = REGULAR;
     private int enemyQuality = DragoonRating.DRAGOON_C.getRating();
-    private String enemyBotName = getText("MissionTransition.enemyBotName.default");
+    private String enemyBotName = getText("AbstractMissionTransition.enemyBotName.default");
     private Camouflage enemyCamouflage = new Camouflage(Camouflage.COLOUR_CAMOUFLAGE, PlayerColour.BLUE.name());
     private PlayerColour enemyColour = BLUE;
 
@@ -1984,7 +1984,7 @@ public class AbstractMissionTransition {
     public String toString() {
         return !getStatus().isCompleted() ?
                      getName() :
-                     getFormattedTextAt(RESOURCE_BUNDLE, "MissionTransition.name.completed", getName());
+                     getFormattedTextAt(RESOURCE_BUNDLE, "AbstractMissionTransition.name.completed", getName());
     }
 
     private static String getText(String resourceKey) {

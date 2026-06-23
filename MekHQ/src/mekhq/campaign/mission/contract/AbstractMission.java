@@ -41,6 +41,7 @@ import static mekhq.campaign.mission.enums.AtBMoraleLevel.MAXIMUM_MORALE_LEVEL;
 import static mekhq.campaign.mission.enums.AtBMoraleLevel.MINIMUM_MORALE_LEVEL;
 import static mekhq.campaign.mission.enums.AtBMoraleLevel.STALEMATE;
 import static mekhq.campaign.personnel.ranks.Rank.RO_MIN;
+import static mekhq.campaign.personnel.skills.SkillType.EXP_REGULAR;
 import static mekhq.campaign.universe.Faction.INDEPENDENT_FACTION_CODE;
 import static mekhq.utilities.MHQInternationalization.getTextAt;
 
@@ -62,10 +63,12 @@ import megamek.logging.MMLogger;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.JumpPath;
 import mekhq.campaign.enums.DragoonRating;
+import mekhq.campaign.finances.Accountant;
 import mekhq.campaign.finances.Money;
 import mekhq.campaign.mission.AbstractMissionTransition;
 import mekhq.campaign.mission.AtBScenario;
 import mekhq.campaign.mission.Scenario;
+import mekhq.campaign.mission.TransportCostCalculations;
 import mekhq.campaign.mission.enums.AtBContractType;
 import mekhq.campaign.mission.enums.AtBMoraleLevel;
 import mekhq.campaign.mission.enums.MissionStatus;
@@ -91,7 +94,8 @@ public abstract class AbstractMission {
     private static final String RESOURCE_BUNDLE = "mekhq.resources.AbstractMission";
 
     private String name;
-    private UUID id = UUID.randomUUID();
+    private UUID uuid = UUID.randomUUID();
+    private AbstractContract parentContract;
     private StratConCampaignState stratConCampaignState;
     private MissionStatus status = MissionStatus.ACTIVE;
     private AtBContractType contractType = UNDEFINED;
@@ -129,6 +133,16 @@ public abstract class AbstractMission {
 
     private int contractDifficulty = 5;
 
+    // actual amounts
+    private Money advanceAmount = Money.zero();
+    private Money signingBonusAmount = Money.zero();
+    private Money overheadAmount = Money.zero();
+    private Money supportAmount = Money.zero();
+    private Money baseAmount = Money.zero();
+    private Money feeAmount = Money.zero();
+    private Money transportAmount = Money.zero();
+    private Money transitAmount = Money.zero();
+
     private int hospitalBedsRented;
     private int kitchensRented;
     private int holdingCellsRented;
@@ -156,12 +170,12 @@ public abstract class AbstractMission {
         this.name = name;
     }
 
-    public int getId() {
-        return id;
+    public UUID getUUID() {
+        return uuid;
     }
 
-    public void setId(int id) {
-        this.id = id;
+    public void setUUID(UUID uuid) {
+        this.uuid = uuid;
     }
 
     public String getSystemId() {
@@ -459,6 +473,62 @@ public abstract class AbstractMission {
         this.contractDifficulty = contractDifficulty;
     }
 
+
+    public Money getAdvanceAmount() {
+        return advanceAmount;
+    }
+
+    public void setAdvanceAmount(Money advanceAmount) {
+        this.advanceAmount = advanceAmount;
+    }
+
+    /**
+     * @return total amount that will be paid on contract acceptance.
+     */
+    public Money getTotalAdvanceAmount() {
+        return advanceAmount.plus(getSigningBonusAmount());
+    }
+
+    public Money getSigningBonusAmount() {
+        return signingBonusAmount;
+    }
+
+    public void setSigningBonusAmount(Money signingBonusAmount) {
+        this.signingBonusAmount = signingBonusAmount;
+    }
+
+    public Money getOverheadAmount() {
+        return overheadAmount;
+    }
+
+    public void setOverheadAmount(Money overheadAmount) {
+        this.overheadAmount = overheadAmount;
+    }
+
+    public Money getSupportAmount() {
+        return supportAmount;
+    }
+
+    public void setSupportAmount(Money supportAmount) {
+        this.supportAmount = supportAmount;
+    }
+
+    public Money getBaseAmount() {
+        return baseAmount;
+    }
+
+    public void setBaseAmount(Money baseAmount) {
+        this.baseAmount = baseAmount;
+    }
+
+    public Money getFeeAmount() {
+        return feeAmount;
+    }
+
+    public void setFeeAmount(Money feeAmount) {
+        this.feeAmount = feeAmount;
+    }
+
     public Money getTransportAmount() {
         return transportAmount;
     }
@@ -473,6 +543,205 @@ public abstract class AbstractMission {
 
     public void setTransitAmount(Money transitAmount) {
         this.transitAmount = transitAmount;
+    }
+
+    public Money getTotalAmountPlusFeesAndBonuses() {
+        return getTotalAmountPlusFees().plus(getSigningBonusAmount());
+    }
+
+    public Money getTotalAmountPlusFees() {
+        return getTotalAmount().minus(getFeeAmount());
+    }
+
+    /**
+     * @param campaign campaign loaded
+     *
+     * @return the cumulative sum the estimated monthly incomes - expenses
+     */
+    public Money getTotalMonthlyPayOut(Campaign campaign) {
+        return getMonthlyPayOut()
+                     .multipliedBy(getLengthInMonths())
+                     .minus(getTotalEstimatedOverheadExpenses(campaign))
+                     .minus(getTotalEstimatedMaintenanceExpenses(campaign))
+                     .minus(getTotalEstimatedPayrollExpenses(campaign));
+    }
+
+    /**
+     * @param campaign campaign loaded
+     *
+     * @return the estimated payroll expenses for one month
+     */
+    public Money getEstimatedPayrollExpenses(Campaign campaign) {
+        Accountant accountant = campaign.getAccountant();
+        if (campaign.getCampaignOptions().isUsePeacetimeCost()) {
+            return accountant.getPeacetimeCost();
+        } else {
+            return accountant.getPayRoll();
+        }
+    }
+
+    /**
+     * @param campaign campaign loaded
+     *
+     * @return the cumulative sum of estimated payroll expenses for the duration of travel + deployment
+     */
+    public Money getTotalEstimatedPayrollExpenses(Campaign campaign) {
+        return getEstimatedPayrollExpenses(campaign).multipliedBy(getLengthPlusTravel(campaign));
+    }
+
+    /**
+     * @param campaign campaign loaded
+     *
+     * @return the total (2-way) estimated transportation fee from the player's current location to this contract's
+     *       planet
+     */
+    public Money getTotalTransportationFees(Campaign campaign) {
+        if ((null != getSystem()) && campaign.getCampaignOptions().isPayForTransport()) {
+            return getTransportCost(campaign, false);
+        }
+
+        return Money.zero();
+    }
+
+    /**
+     * Calculates the employer's transport reimbursement based on the contract's transport compensation percentage.
+     *
+     * <p>This represents the amount the employer pays toward your transport costs. For example, if transport
+     * compensation is 50% and the full transport cost is 1,000,000 C-bills, the employer reimburses you 500,000.</p>
+     *
+     * @param campaign the current {@link Campaign} used for transport cost calculation
+     *
+     * @return the {@link Money} amount the employer reimburses for transport
+     */
+    public Money getEmployerTransportReimbursement(Campaign campaign) {
+        if ((null == getSystem()) || !campaign.getCampaignOptions().isPayForTransport()) {
+            return Money.zero();
+        }
+
+        Money fullTransportCost = getTransportCost(campaign, false);
+        return fullTransportCost.multipliedBy(parentContract.getTransportCompensation() / 100.0);
+    }
+
+    /**
+     * Calculates the player's out-of-pocket transport cost after the employer's reimbursement.
+     *
+     * <p>This is the full transport cost minus the employer's reimbursement. For example, if transport compensation
+     * is 50% and the full transport cost is 1,000,000 C-bills, the player pays 500,000.</p>
+     *
+     * @param campaign the current {@link Campaign} used for transport cost calculation
+     *
+     * @return the {@link Money} amount the player pays for transport after employer reimbursement
+     */
+    public Money getPlayerTransportCost(Campaign campaign) {
+        if ((null == getSystem()) || !campaign.getCampaignOptions().isPayForTransport()) {
+            return Money.zero();
+        }
+
+        Money fullTransportCost = getTransportCost(campaign, false);
+        Money employerReimbursement = getEmployerTransportReimbursement(campaign);
+        return fullTransportCost.minus(employerReimbursement);
+    }
+
+    /**
+     * Calculates the total transport cost for this contract based on the campaign's transport settings and the
+     * contract's jump path.
+     *
+     * <p>The calculation considers the following factors:</p>
+     * <ul>
+     *   <li>The jump path duration, including any command circuit adjustments</li>
+     *   <li>The campaign's transport cost tables (using the Regular experience level)</li>
+     *   <li>Whether the employer pays for a round trip (two-way pay)</li>
+     *   <li>Whether transport compensation should be applied to reduce the final cost</li>
+     * </ul>
+     * <p>When {@code includeTransportCompensation} is true, the method calculates the employer's compensation
+     * percentage and subtracts it from the final transport cost.</p>
+     *
+     * @param campaign                     the current {@link Campaign} used for jump path, transport options, and cost
+     *                                     calculation
+     * @param includeTransportCompensation whether to apply the contract's transport compensation percentage to reduce
+     *                                     the cost
+     *
+     * @return the total {@link Money} required for transport, after applying all applicable modifiers
+     */
+    private Money getTransportCost(Campaign campaign, boolean includeTransportCompensation) {
+        JumpPath jumpPath = getJumpPath(campaign);
+        if (jumpPath == null) {
+            return Money.zero();
+        }
+
+        TransportCostCalculations transportCostCalculations = campaign.getTransportCostCalculation(EXP_REGULAR);
+        boolean useTwoWayPay = campaign.getCampaignOptions().isUseTwoWayPay();
+        boolean isUseCommandCircuits = campaign.isUseCommandCircuitForContract(this);
+        int duration = (int) ceil(jumpPath.getTotalTime(campaign.getLocalDate(),
+              campaign.getCurrentLocation().getTransitTime(), isUseCommandCircuits));
+        Money transportCost = transportCostCalculations.calculateJumpCostForEntireJourney(duration,
+              jumpPath.getJumps());
+
+        // Is the employer paying for both ways?
+        transportCost = transportCost.multipliedBy(useTwoWayPay ? 2 : 1);
+
+        if (includeTransportCompensation) {
+            Money transportCompensation = transportCost.multipliedBy(parentContract.getTransportCompensation() / 100.0);
+            transportCost = transportCost.minus(transportCompensation);
+        }
+
+        return transportCost;
+    }
+
+    /**
+     * Get the estimated total profit for this contract. The total profit is the total contract payment including fees
+     * and bonuses, minus overhead, maintenance, payroll, spare parts, and other monthly expenses. The duration used for
+     * monthly expenses is the contract duration plus the travel time from the unit's current world to the contract
+     * world and back.
+     *
+     * <p>Transport costs are handled as follows: the employer's transport reimbursement is included in the contract
+     * income (via {@link #getTotalAmount()}), and the full transport cost is subtracted here. The net effect is that
+     * profit is reduced by the player's out-of-pocket transport cost (full cost minus employer reimbursement).</p>
+     *
+     * @param campaign The campaign with which this contract is associated.
+     *
+     * @return The estimated profit in the current default currency.
+     */
+    public Money getEstimatedTotalProfit(Campaign campaign) {
+        return getTotalAdvanceAmount()
+                     .plus(getTotalMonthlyPayOut(campaign))
+                     .minus(getTotalTransportationFees(campaign));
+    }
+
+    /**
+     * @param campaign campaign loaded
+     *
+     * @return the cumulative sum of estimated maintenance expenses for the duration of travel + deployment
+     */
+    public Money getTotalEstimatedMaintenanceExpenses(Campaign campaign) {
+        return campaign.getAccountant().getMaintenanceCosts().multipliedBy(getLengthPlusTravel(campaign));
+    }
+
+    /**
+     * @param campaign campaign loaded
+     *
+     * @return the cumulative sum of estimated overhead expenses for the duration of travel + deployment
+     */
+    public Money getTotalEstimatedOverheadExpenses(Campaign campaign) {
+        return campaign.getAccountant().getOverheadExpenses().multipliedBy(getLengthPlusTravel(campaign));
+    }
+
+    public Money getTotalAmount() {
+        return getBaseAmount()
+                     .plus(getSupportAmount())
+                     .plus(getOverheadAmount())
+                     .plus(getTransportAmount())
+                     .plus(getTransitAmount());
+    }
+
+    public Money getMonthlyPayOut() {
+        if (getLengthInMonths() <= 0) {
+            return Money.zero();
+        }
+
+        return getTotalAmountPlusFeesAndBonuses()
+                     .minus(getTotalAdvanceAmount())
+                     .dividedBy(getLengthInMonths());
     }
 
     public String getEnemyName() {
@@ -583,7 +852,7 @@ public abstract class AbstractMission {
      * @param scenario the scenario to add this mission
      */
     public void addScenario(final Scenario scenario) {
-        scenario.setMissionId(id);
+        scenario.setMissionId(uuid);
         getScenarios().add(scenario);
     }
 

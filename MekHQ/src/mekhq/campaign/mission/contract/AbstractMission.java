@@ -51,9 +51,10 @@ import java.text.ParseException;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
 import jakarta.annotation.Nonnull;
@@ -69,14 +70,12 @@ import mekhq.campaign.JumpPath;
 import mekhq.campaign.enums.DragoonRating;
 import mekhq.campaign.finances.Accountant;
 import mekhq.campaign.finances.Money;
-import mekhq.campaign.mission.AbstractMissionTransition;
 import mekhq.campaign.mission.AtBScenario;
 import mekhq.campaign.mission.Mission;
 import mekhq.campaign.mission.Scenario;
 import mekhq.campaign.mission.TransportCostCalculations;
 import mekhq.campaign.mission.enums.AtBContractType;
 import mekhq.campaign.mission.enums.AtBMoraleLevel;
-import mekhq.campaign.mission.enums.ContractCommandRights;
 import mekhq.campaign.mission.enums.MissionStatus;
 import mekhq.campaign.personnel.Bloodname;
 import mekhq.campaign.personnel.Person;
@@ -100,7 +99,7 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 public abstract class AbstractMission {
-    private static final MMLogger LOGGER = MMLogger.create(AbstractContract.class);
+    private static final MMLogger LOGGER = MMLogger.create(AbstractMission.class);
     private static final String RESOURCE_BUNDLE = "mekhq.resources.AbstractMission";
 
     private String name;
@@ -168,6 +167,9 @@ public abstract class AbstractMission {
     private Money routedPayout = null;
 
     private final List<Scenario> scenarios = new ArrayList<>();
+
+    protected static final Map<String, AbstractMission.FieldSetter> fieldSetters = initializeFieldSetters();
+    protected static final Map<String, AbstractMission.NodeSetter> nodeSetters = initializeNodeSetters();
 
     public AbstractMission() {
     }
@@ -838,8 +840,8 @@ public abstract class AbstractMission {
      * Retrieves the list of scenarios.
      *
      * <p><b>Note:</b> this returns the actual scenario array. Any changes made to the array will be directly
-     * modifying the version retained inside the {@link AbstractMissionTransition} object. If you just want to parse the
-     * list {@link #getScenariosCopy()} is a safer option.</p>
+     * modifying the version retained inside the {@link AbstractMission} object. If you just want to parse the list
+     * {@link #getScenariosCopy()} is a safer option.</p>
      *
      * @return a list of Scenario objects.
      */
@@ -1068,9 +1070,8 @@ public abstract class AbstractMission {
     }
 
     /**
-     * Writes all {@link AbstractMissionTransition} fields to XML. Subclasses that have their own private fields must
-     * override this, call {@code super.writeToXMLBegin(...)}, append only their private tags, and return the resulting
-     * indent.
+     * Writes all {@link AbstractMission} fields to XML. Subclasses that have their own private fields must override
+     * this, call {@code super.writeToXMLBegin(...)}, append only their private tags, and return the resulting indent.
      */
     protected int writeToXMLBegin(Campaign campaign, final PrintWriter printWriter, int indent) {
         // opening tag and core identity
@@ -1083,7 +1084,6 @@ public abstract class AbstractMission {
             MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "planetName", getLegacyPlanetName());
         }
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "status", getStatus().name());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "desc", getDescription());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "id", getId());
 
         // scenarios block
@@ -1097,18 +1097,6 @@ public abstract class AbstractMission {
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "nMonths", getLengthInMonths());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "startDate", getStartDate());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "endDate", getEndingDate());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "employer", getEmployerName());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "paymentMultiplier", getPaymentMultiplier());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "commandRights", getCommandRights().name());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "overheadComp", getOverheadCompensation());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvagePct", getSalvagePercent());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvageExchange", isSalvageExchange());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "straightSupport", getStraightSupport());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "battleLossComp", getBattleLossCompensation());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "transportComp", getTransportCompensation());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "mrbcFee", isPaidMRBCFee());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "advancePct", getAdvancePercent());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "signBonus", getSigningBonus());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "hospitalBedsRented", getHospitalBedsRented());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "kitchensRented", getKitchensRented());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "holdingCellsRented", getHoldingCellsRented());
@@ -1120,11 +1108,8 @@ public abstract class AbstractMission {
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "supportAmount", getSupportAmount());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "baseAmount", getBaseAmount());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "feeAmount", getFeeAmount());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvagedByUnit", getSalvagedByUnit());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvagedByEmployer", getSalvagedByEmployer());
 
         // faction and force data
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "employerCode", getEmployerCode());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "enemyCode", getEnemyCode());
         if (getEnemyMercenaryEmployerCode() != null) {
             MHQXMLUtility.writeSimpleXMLTag(printWriter,
@@ -1172,14 +1157,7 @@ public abstract class AbstractMission {
             MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "routedPayout", getRoutedPayout());
         }
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "partsAvailabilityLevel", getPartsAvailabilityLevel());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "sharesPct", getSharesPercent());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "batchallAccepted", isBatchallAccepted());
-
-        // negotiation roll results
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "commandRoll", getContractNegotiationCommandRoll());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvageRoll", getContractNegotiationSalvageRoll());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "supportRoll", getContractNegotiationSupportRoll());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "transportRoll", getContractNegotiationTransportRoll());
 
         // StratCon state
         if (getStratConCampaignState() != null) {
@@ -1187,11 +1165,6 @@ public abstract class AbstractMission {
         }
 
         // NPCs
-        if (getEmployerLiaison() != null) {
-            MHQXMLUtility.writeSimpleXMLOpenTag(printWriter, indent++, "employerLiaison");
-            getEmployerLiaison().writeToXMLHeadless(printWriter, indent, campaign);
-            MHQXMLUtility.writeSimpleXMLCloseTag(printWriter, --indent, "employerLiaison");
-        }
         if (getClanOpponent() != null) {
             MHQXMLUtility.writeSimpleXMLOpenTag(printWriter, indent++, "clanOpponent");
             getClanOpponent().writeToXMLHeadless(printWriter, indent, campaign);
@@ -1205,147 +1178,108 @@ public abstract class AbstractMission {
         MHQXMLUtility.writeSimpleXMLCloseTag(pw, --indent, "mission");
     }
 
-    protected void initializeFieldSetters() {
+    protected static Map<String, AbstractMission.FieldSetter> initializeFieldSetters() {
+        Map<String, AbstractMission.FieldSetter> fieldSetters = new HashMap<>();
+
         // core identity
         fieldSetters.put("name",
-              (v, c) -> setName(v.trim()));
+              (mission, v, c) -> mission.setName(v.trim()));
         fieldSetters.put("planetid",
-              (v, c) -> setSystemId(v.trim()));
+              (mission, v, c) -> mission.setSystemId(v.trim()));
         fieldSetters.put("systemid",
-              (v, c) -> setSystemId(v.trim()));
-        fieldSetters.put("planetname", this::parsePlanetName);
+              (mission, v, c) -> mission.setSystemId(v.trim()));
+        fieldSetters.put("planetname",
+              (mission, v, c) -> mission.parsePlanetName(v, c));
         fieldSetters.put("status",
-              (v, c) -> setStatus(MissionStatus.parseFromString(v.trim())));
+              (mission, v, c) -> mission.setStatus(MissionStatus.parseFromString(v.trim())));
         fieldSetters.put("id",
-              (v, c) -> setId(Integer.parseInt(v.trim())));
-        fieldSetters.put("desc",
-              (v, c) -> setDescription(v.trim()));
+              (mission, v, c) -> mission.setId(Integer.parseInt(v.trim())));
         fieldSetters.put("type",
-              (v, c) -> setContractTypeName(v.trim()));
+              (mission, v, c) -> mission.setContractTypeName(v.trim()));
 
         // contract financials and terms
-        fieldSetters.put("employer",
-              (v, c) -> setEmployerName(v.trim()));
         fieldSetters.put("startdate",
-              (v, c) -> setStartDate(MHQXMLUtility.parseDate(v.trim())));
+              (mission, v, c) -> mission.setStartDate(MHQXMLUtility.parseDate(v.trim())));
         fieldSetters.put("enddate",
-              (v, c) -> setEndingDate(MHQXMLUtility.parseDate(v.trim())));
+              (mission, v, c) -> mission.setEndingDate(MHQXMLUtility.parseDate(v.trim())));
         fieldSetters.put("nmonths",
-              (v, c) -> setLengthInMonths(Integer.parseInt(v.trim())));
-        fieldSetters.put("paymentmultiplier",
-              (v, c) -> setPaymentMultiplier(Double.parseDouble(v.trim())));
-        fieldSetters.put("commandrights",
-              (v, c) -> setCommandRights(ContractCommandRights.parseFromString(v.trim())));
-        fieldSetters.put("overheadcomp",
-              (v, c) -> setOverheadCompensation(Integer.parseInt(v.trim())));
-        fieldSetters.put("salvagepct",
-              (v, c) -> setSalvagePercent(Integer.parseInt(v.trim())));
-        fieldSetters.put("salvageexchange",
-              (v, c) -> setSalvageExchange(Boolean.parseBoolean(v.trim())));
-        fieldSetters.put("straightsupport",
-              (v, c) -> setStraightSupport(Integer.parseInt(v.trim())));
-        fieldSetters.put("battlelosscomp",
-              (v, c) -> setBattleLossCompensation(Integer.parseInt(v.trim())));
-        fieldSetters.put("transportcomp",
-              (v, c) -> setTransportCompensation(Integer.parseInt(v.trim())));
-        fieldSetters.put("advancepct",
-              (v, c) -> setAdvancePercent(Integer.parseInt(v.trim())));
-        fieldSetters.put("signbonus",
-              (v, c) -> setSigningBonus(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setLengthInMonths(Integer.parseInt(v.trim())));
         fieldSetters.put("hospitalbedsrented",
-              (v, c) -> setHospitalBedsRented(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setHospitalBedsRented(Integer.parseInt(v.trim())));
         fieldSetters.put("kitchensrented",
-              (v, c) -> setKitchensRented(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setKitchensRented(Integer.parseInt(v.trim())));
         fieldSetters.put("holdingcellsrented",
-              (v, c) -> setHoldingCellsRented(Integer.parseInt(v.trim())));
-        fieldSetters.put("mrbcfee",
-              (v, c) -> setPaidMRBCFee(v.trim().equals("true")));
+              (mission, v, c) -> mission.setHoldingCellsRented(Integer.parseInt(v.trim())));
         fieldSetters.put("advanceamount",
-              (v, c) -> setAdvanceAmount(Money.fromXmlString(v.trim())));
+              (mission, v, c) -> mission.setAdvanceAmount(Money.fromXmlString(v.trim())));
         fieldSetters.put("signingamount",
-              (v, c) -> setSigningBonusAmount(Money.fromXmlString(v.trim())));
+              (mission, v, c) -> mission.setSigningBonusAmount(Money.fromXmlString(v.trim())));
         fieldSetters.put("transportamount",
-              (v, c) -> setTransportAmount(Money.fromXmlString(v.trim())));
+              (mission, v, c) -> mission.setTransportAmount(Money.fromXmlString(v.trim())));
         fieldSetters.put("transitamount",
-              (v, c) -> setTransitAmount(Money.fromXmlString(v.trim())));
+              (mission, v, c) -> mission.setTransitAmount(Money.fromXmlString(v.trim())));
         fieldSetters.put("overheadamount",
-              (v, c) -> setOverheadAmount(Money.fromXmlString(v.trim())));
+              (mission, v, c) -> mission.setOverheadAmount(Money.fromXmlString(v.trim())));
         fieldSetters.put("supportamount",
-              (v, c) -> setSupportAmount(Money.fromXmlString(v.trim())));
+              (mission, v, c) -> mission.setSupportAmount(Money.fromXmlString(v.trim())));
         fieldSetters.put("baseamount",
-              (v, c) -> setBaseAmount(Money.fromXmlString(v.trim())));
+              (mission, v, c) -> mission.setBaseAmount(Money.fromXmlString(v.trim())));
         fieldSetters.put("feeamount",
-              (v, c) -> setFeeAmount(Money.fromXmlString(v.trim())));
-        fieldSetters.put("salvagedbyunit",
-              (v, c) -> setSalvagedByUnit(Money.fromXmlString(v.trim())));
-        fieldSetters.put("salvagedbyemployer",
-              (v, c) -> setSalvagedByEmployer(Money.fromXmlString(v.trim())));
+              (mission, v, c) -> mission.setFeeAmount(Money.fromXmlString(v.trim())));
 
         // faction and force data
-        fieldSetters.put("employercode",
-              (v, c) -> setEmployerCode(v.trim()));
         fieldSetters.put("enemycode",
-              (v, c) -> setEnemyCode(v.trim()));
+              (mission, v, c) -> mission.setEnemyCode(v.trim()));
         fieldSetters.put("enemymercenaryemployercode",
-              (v, c) -> setEnemyMercenaryEmployerCode(v.trim()));
+              (mission, v, c) -> mission.setEnemyMercenaryEmployerCode(v.trim()));
         fieldSetters.put("contracttype",
-              (v, c) -> setContractType(AtBContractType.parseFromString(v.trim())));
+              (mission, v, c) -> mission.setContractType(AtBContractType.parseFromString(v.trim())));
         fieldSetters.put("allyskill",
-              (v, c) -> setAllySkill(SkillLevel.parseFromString(v.trim())));
+              (mission, v, c) -> mission.setAllySkill(SkillLevel.parseFromString(v.trim())));
         fieldSetters.put("allyquality",
-              (v, c) -> setAllyQuality(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setAllyQuality(Integer.parseInt(v.trim())));
         fieldSetters.put("enemyskill",
-              (v, c) -> setAllySkill(SkillLevel.parseFromString(v.trim())));
+              (mission, v, c) -> mission.setAllySkill(SkillLevel.parseFromString(v.trim())));
         fieldSetters.put("allyquality",
-              (v, c) -> setAllyQuality(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setAllyQuality(Integer.parseInt(v.trim())));
         fieldSetters.put("enemyskill",
-              (v, c) -> setEnemySkill(SkillLevel.parseFromString(v.trim())));
+              (mission, v, c) -> mission.setEnemySkill(SkillLevel.parseFromString(v.trim())));
         fieldSetters.put("enemyquality",
-              (v, c) -> setEnemyQuality(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setEnemyQuality(Integer.parseInt(v.trim())));
         fieldSetters.put("difficulty",
-              (v, c) -> setContractDifficulty(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setContractDifficulty(Integer.parseInt(v.trim())));
         fieldSetters.put("allybotname",
-              (v, c) -> setAllyBotName(v.trim()));
+              (mission, v, c) -> mission.setAllyBotName(v.trim()));
         fieldSetters.put("enemybotname",
-              (v, c) -> setEnemyBotName(v.trim()));
+              (mission, v, c) -> mission.setEnemyBotName(v.trim()));
         fieldSetters.put("allycamocategory",
-              (v, c) -> getAllyCamouflage().setCategory(v.trim()));
+              (mission, v, c) -> mission.getAllyCamouflage().setCategory(v.trim()));
         fieldSetters.put("allycamofilename",
-              (v, c) -> getAllyCamouflage().setFilename(v.trim()));
+              (mission, v, c) -> mission.getAllyCamouflage().setFilename(v.trim()));
         fieldSetters.put("allycolour",
-              (v, c) -> setAllyColour(PlayerColour.parseFromString(v.trim())));
+              (mission, v, c) -> mission.setAllyColour(PlayerColour.parseFromString(v.trim())));
         fieldSetters.put("enemycamocategory",
-              (v, c) -> getEnemyCamouflage().setCategory(v.trim()));
+              (mission, v, c) -> mission.getEnemyCamouflage().setCategory(v.trim()));
         fieldSetters.put("enemycamofilename",
-              (v, c) -> getEnemyCamouflage().setFilename(v.trim()));
+              (mission, v, c) -> mission.getEnemyCamouflage().setFilename(v.trim()));
         fieldSetters.put("enemycolour",
-              (v, c) -> setEnemyColour(PlayerColour.parseFromString(v.trim())));
+              (mission, v, c) -> mission.setEnemyColour(PlayerColour.parseFromString(v.trim())));
         fieldSetters.put("requiredcombatteams",
-              (v, c) -> setRequiredCombatTeams(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setRequiredCombatTeams(Integer.parseInt(v.trim())));
         fieldSetters.put("requiredcombatelements",
-              (v, c) -> setRequiredCombatElements(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setRequiredCombatElements(Integer.parseInt(v.trim())));
         fieldSetters.put("moralelevel",
-              (v, c) -> setMoraleLevel(AtBMoraleLevel.parseFromString(v.trim())));
+              (mission, v, c) -> mission.setMoraleLevel(AtBMoraleLevel.parseFromString(v.trim())));
         fieldSetters.put("routend",
-              (v, c) -> setRoutEndDate(MHQXMLUtility.parseDate(v.trim())));
+              (mission, v, c) -> mission.setRoutEndDate(MHQXMLUtility.parseDate(v.trim())));
         fieldSetters.put("routedpayout",
-              (v, c) -> setRoutedPayout(Money.fromXmlString(v.trim())));
+              (mission, v, c) -> mission.setRoutedPayout(Money.fromXmlString(v.trim())));
         fieldSetters.put("partsavailabilitylevel",
-              (v, c) -> setPartsAvailabilityLevel(Integer.parseInt(v.trim())));
-        fieldSetters.put("sharespct",
-              (v, c) -> setSharesPercent(Integer.parseInt(v.trim())));
+              (mission, v, c) -> mission.setPartsAvailabilityLevel(Integer.parseInt(v.trim())));
         fieldSetters.put("batchallaccepted",
-              (v, c) -> setBatchallAccepted(Boolean.parseBoolean(v.trim())));
+              (mission, v, c) -> mission.setBatchallAccepted(Boolean.parseBoolean(v.trim())));
 
-        // negotiation roll results
-        fieldSetters.put("commandroll",
-              (v, c) -> setContractNegotiationCommandRoll(Integer.parseInt(v.trim())));
-        fieldSetters.put("salvageroll",
-              (v, c) -> setContractNegotiationSalvageRoll(Integer.parseInt(v.trim())));
-        fieldSetters.put("supportroll",
-              (v, c) -> setContractNegotiationSupportRoll(Integer.parseInt(v.trim())));
-        fieldSetters.put("transportroll",
-              (v, c) -> setContractNegotiationTransportRoll(Integer.parseInt(v.trim())));
+        return fieldSetters;
     }
 
     private void parsePlanetName(String value, Campaign campaign) {
@@ -1358,19 +1292,24 @@ public abstract class AbstractMission {
         }
     }
 
-    protected void initializeNodeSetters() {
+    protected static Map<String, AbstractMission.NodeSetter> initializeNodeSetters() {
+        Map<String, AbstractMission.NodeSetter> nodeSetters = new HashMap<>();
+
         // scenario
-        nodeSetters.put("scenarios", (node, campaign, version) -> scenarioNodeSetter(version, node, campaign));
+        nodeSetters.put("scenarios", (node, campaign, mission, version) -> mission.scenarioNodeSetter(version, node,
+              campaign));
 
         // StratCon state
         nodeSetters.put(StratConCampaignState.ROOT_XML_ELEMENT_NAME.toLowerCase(),
-              (node, campaign, version) -> setStratConCampaignState(StratConCampaignState.Deserialize(node)));
+              (node, campaign, mission, version) -> mission.setStratConCampaignState(StratConCampaignState.Deserialize(
+                    node)));
 
         // NPCs
-        nodeSetters.put("employerliaison",
-              (node, campaign, version) -> setEmployerLiaison(Person.generateInstanceFromXML(node, campaign, version)));
         nodeSetters.put("clanopponent",
-              (node, campaign, version) -> setClanOpponent(Person.generateInstanceFromXML(node, campaign, version)));
+              (node, campaign, mission, version) -> mission.setClanOpponent(Person.generateInstanceFromXML(node,
+                    campaign, version)));
+
+        return nodeSetters;
     }
 
     private void scenarioNodeSetter(Version version, Node node, Campaign campaign) {
@@ -1410,17 +1349,17 @@ public abstract class AbstractMission {
             String nodeName = item.getNodeName().trim().toLowerCase();
 
             try {
-                BiConsumer<String, Campaign> fieldSetter = fieldSetters.get(nodeName);
+                AbstractMission.FieldSetter fieldSetter = fieldSetters.get(nodeName);
 
                 if (fieldSetter != null) {
-                    fieldSetter.accept(item.getTextContent(), campaign);
+                    fieldSetter.accept(this, item.getTextContent(), campaign);
                     continue;
                 }
 
-                AbstractMissionTransition.NodeSetter nodeSetter = nodeSetters.get(nodeName);
+                AbstractMission.NodeSetter nodeSetter = nodeSetters.get(nodeName);
 
                 if (nodeSetter != null) {
-                    nodeSetter.accept(item, campaign, version);
+                    nodeSetter.accept(node, campaign, this, version);
                 }
             } catch (Exception ex) {
                 LOGGER.error("Failed to load node {}", nodeName, ex);
@@ -1429,20 +1368,20 @@ public abstract class AbstractMission {
     }
 
     /**
-     * Instantiates the correct {@link AbstractMissionTransition} subclass from XML and fully loads its state. The
-     * concrete type is determined by the {@code type} attribute on the node, identical to before.
+     * Instantiates the correct {@link AbstractMission} subclass from XML and fully loads its state. The concrete type
+     * is determined by the {@code type} attribute on the node, identical to before.
      * <p>
      * Callers that previously used {@code Mission.generateInstanceFromXML} should migrate to this method; the static
      * delegate on {@link Mission} is preserved only for backward compatibility.
      */
-    public static AbstractMissionTransition generateInstanceFromXML(Node node, Campaign campaign, Version version) {
-        AbstractMissionTransition retVal = null;
+    public static AbstractMission generateInstanceFromXML(Node node, Campaign campaign, Version version) {
+        AbstractMission retVal = null;
         NamedNodeMap nodeAttributes = node.getAttributes();
         Node classNameNode = nodeAttributes.getNamedItem("type");
         String className = classNameNode.getTextContent();
 
         try {
-            retVal = (AbstractMissionTransition) Class.forName(className).getDeclaredConstructor().newInstance();
+            retVal = (AbstractMission) Class.forName(className).getDeclaredConstructor().newInstance();
             retVal.loadFieldsFromXmlNode(campaign, version, node);
         } catch (Exception ex) {
             LOGGER.error("", ex);
@@ -1460,6 +1399,11 @@ public abstract class AbstractMission {
 
     @FunctionalInterface
     public interface NodeSetter {
-        void accept(Node node, Campaign campaign, Version version);
+        void accept(Node node, Campaign campaign, AbstractMission mission, Version version);
+    }
+
+    @FunctionalInterface
+    public interface FieldSetter {
+        void accept(AbstractMission mission, String value, Campaign campaign);
     }
 }

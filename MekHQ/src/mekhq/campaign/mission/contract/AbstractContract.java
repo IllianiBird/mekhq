@@ -120,8 +120,8 @@ public abstract class AbstractContract {
 
     private final List<AbstractMission> missions = new ArrayList<>();
 
-    protected final Map<String, BiConsumer<String, Campaign>> fieldSetters = initializeFieldSetters();
-    protected final Map<String, AbstractMissionTransition.NodeSetter> nodeSetters = new HashMap<>();
+    protected final Map<String, BiConsumer<String, Campaign>> fieldSetters = new HashMap<>();
+    protected final Map<String, AbstractContract.NodeSetter> nodeSetters = new HashMap<>();
 
     AbstractContract() {}
 

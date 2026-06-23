@@ -47,7 +47,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.BiConsumer;
 
 import jakarta.annotation.Nullable;
 import megamek.Version;
@@ -55,7 +54,6 @@ import megamek.common.enums.Gender;
 import megamek.logging.MMLogger;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.finances.Money;
-import mekhq.campaign.mission.AbstractMissionTransition;
 import mekhq.campaign.mission.Mission;
 import mekhq.campaign.mission.enums.ContractCommandRights;
 import mekhq.campaign.mission.enums.MissionStatus;
@@ -120,8 +118,8 @@ public abstract class AbstractContract {
 
     private final List<AbstractMission> missions = new ArrayList<>();
 
-    protected final Map<String, BiConsumer<String, Campaign>> fieldSetters = new HashMap<>();
-    protected final Map<String, AbstractContract.NodeSetter> nodeSetters = new HashMap<>();
+    protected static final Map<String, FieldSetter> fieldSetters = initializeFieldSetters();
+    protected static final Map<String, NodeSetter> nodeSetters = initializeNodeSetters();
 
     AbstractContract() {}
 
@@ -500,8 +498,8 @@ public abstract class AbstractContract {
      * Retrieves the list of missions.
      *
      * <p><b>Note:</b> this returns the actual mission array. Any changes made to the array will be directly
-     * modifying the version retained inside the {@link AbstractMissionTransition} object. If you just want to parse the
-     * list {@link #getMissionsCopy()} is a safer option.</p>
+     * modifying the version retained inside the {@link AbstractContract} object. If you just want to parse the list
+     * {@link #getMissionsCopy()} is a safer option.</p>
      *
      * @return a list of Scenario objects.
      */
@@ -531,9 +529,8 @@ public abstract class AbstractContract {
     }
 
     /**
-     * Writes all {@link AbstractMissionTransition} fields to XML. Subclasses that have their own private fields must
-     * override this, call {@code super.writeToXMLBegin(...)}, append only their private tags, and return the resulting
-     * indent.
+     * Writes all {@link AbstractContract} fields to XML. Subclasses that have their own private fields must override
+     * this, call {@code super.writeToXMLBegin(...)}, append only their private tags, and return the resulting indent.
      */
     protected int writeToXMLBegin(Campaign campaign, final PrintWriter printWriter, int indent) {
         // opening tag and core identity
@@ -584,70 +581,78 @@ public abstract class AbstractContract {
         MHQXMLUtility.writeSimpleXMLCloseTag(pw, --indent, "mission");
     }
 
-    protected void initializeFieldSetters() {
+    protected static Map<String, FieldSetter> initializeFieldSetters() {
+        Map<String, FieldSetter> fieldSetters = new HashMap<>();
         // core identity
         fieldSetters.put("name",
-              (v, c) -> setName(v.trim()));
+              (contract, v, c) -> contract.setName(v.trim()));
         fieldSetters.put("status",
-              (v, c) -> setStatus(MissionStatus.parseFromString(v.trim())));
+              (contract, v, c) -> contract.setStatus(MissionStatus.parseFromString(v.trim())));
         fieldSetters.put("id",
-              (v, c) -> setId(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setId(Integer.parseInt(v.trim())));
         fieldSetters.put("desc",
-              (v, c) -> setDescription(v.trim()));
+              (contract, v, c) -> contract.setDescription(v.trim()));
 
         // contract financials and terms
         fieldSetters.put("employer",
-              (v, c) -> setEmployerName(v.trim()));
+              (contract, v, c) -> contract.setEmployerName(v.trim()));
         fieldSetters.put("paymentmultiplier",
-              (v, c) -> setPaymentMultiplier(Double.parseDouble(v.trim())));
+              (contract, v, c) -> contract.setPaymentMultiplier(Double.parseDouble(v.trim())));
         fieldSetters.put("commandrights",
-              (v, c) -> setCommandRights(ContractCommandRights.parseFromString(v.trim())));
+              (contract, v, c) -> contract.setCommandRights(ContractCommandRights.parseFromString(v.trim())));
         fieldSetters.put("overheadcomp",
-              (v, c) -> setOverheadCompensation(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setOverheadCompensation(Integer.parseInt(v.trim())));
         fieldSetters.put("salvagepct",
-              (v, c) -> setSalvagePercent(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setSalvagePercent(Integer.parseInt(v.trim())));
         fieldSetters.put("salvageexchange",
-              (v, c) -> setSalvageExchange(Boolean.parseBoolean(v.trim())));
+              (contract, v, c) -> contract.setSalvageExchange(Boolean.parseBoolean(v.trim())));
         fieldSetters.put("straightsupport",
-              (v, c) -> setStraightSupport(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setStraightSupport(Integer.parseInt(v.trim())));
         fieldSetters.put("battlelosscomp",
-              (v, c) -> setBattleLossCompensation(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setBattleLossCompensation(Integer.parseInt(v.trim())));
         fieldSetters.put("transportcomp",
-              (v, c) -> setTransportCompensation(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setTransportCompensation(Integer.parseInt(v.trim())));
         fieldSetters.put("advancepct",
-              (v, c) -> setAdvancePercent(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setAdvancePercent(Integer.parseInt(v.trim())));
         fieldSetters.put("signbonus",
-              (v, c) -> setSigningBonus(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setSigningBonus(Integer.parseInt(v.trim())));
         fieldSetters.put("mrbcfee",
-              (v, c) -> setPaidMRBCFee(v.trim().equals("true")));
+              (contract, v, c) -> contract.setPaidMRBCFee(v.trim().equals("true")));
         fieldSetters.put("salvagedbyunit",
-              (v, c) -> setSalvagedByUnit(Money.fromXmlString(v.trim())));
+              (contract, v, c) -> contract.setSalvagedByUnit(Money.fromXmlString(v.trim())));
         fieldSetters.put("salvagedbyemployer",
-              (v, c) -> setSalvagedByEmployer(Money.fromXmlString(v.trim())));
+              (contract, v, c) -> contract.setSalvagedByEmployer(Money.fromXmlString(v.trim())));
 
         // faction and force data
         fieldSetters.put("employercode",
-              (v, c) -> setEmployerCode(v.trim()));
+              (contract, v, c) -> contract.setEmployerCode(v.trim()));
         fieldSetters.put("difficulty",
-              (v, c) -> setContractDifficulty(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setContractDifficulty(Integer.parseInt(v.trim())));
         fieldSetters.put("sharespct",
-              (v, c) -> setSharesPercent(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setSharesPercent(Integer.parseInt(v.trim())));
 
         // negotiation roll results
         fieldSetters.put("commandroll",
-              (v, c) -> setContractNegotiationCommandRoll(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setContractNegotiationCommandRoll(Integer.parseInt(v.trim())));
         fieldSetters.put("salvageroll",
-              (v, c) -> setContractNegotiationSalvageRoll(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setContractNegotiationSalvageRoll(Integer.parseInt(v.trim())));
         fieldSetters.put("supportroll",
-              (v, c) -> setContractNegotiationSupportRoll(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setContractNegotiationSupportRoll(Integer.parseInt(v.trim())));
         fieldSetters.put("transportroll",
-              (v, c) -> setContractNegotiationTransportRoll(Integer.parseInt(v.trim())));
+              (contract, v, c) -> contract.setContractNegotiationTransportRoll(Integer.parseInt(v.trim())));
+
+        return fieldSetters;
     }
 
-    protected void initializeNodeSetters() {
+    protected static Map<String, NodeSetter> initializeNodeSetters() {
+        Map<String, NodeSetter> nodeSetters = new HashMap<>();
         // NPCs
         nodeSetters.put("employerliaison",
-              (node, campaign, version) -> setEmployerLiaison(Person.generateInstanceFromXML(node, campaign, version)));
+              (node, campaign, contract, version) -> contract.setEmployerLiaison(Person.generateInstanceFromXML(node,
+                    campaign,
+                    version)));
+
+        return nodeSetters;
     }
 
     public void loadFieldsFromXmlNode(Campaign campaign, Version version, Node node) throws ParseException {
@@ -662,17 +667,17 @@ public abstract class AbstractContract {
             String nodeName = item.getNodeName().trim().toLowerCase();
 
             try {
-                BiConsumer<String, Campaign> fieldSetter = fieldSetters.get(nodeName);
+                FieldSetter fieldSetter = fieldSetters.get(nodeName);
 
                 if (fieldSetter != null) {
-                    fieldSetter.accept(item.getTextContent(), campaign);
+                    fieldSetter.accept(this, item.getTextContent(), campaign);
                     continue;
                 }
 
-                AbstractMissionTransition.NodeSetter nodeSetter = nodeSetters.get(nodeName);
+                AbstractContract.NodeSetter nodeSetter = nodeSetters.get(nodeName);
 
                 if (nodeSetter != null) {
-                    nodeSetter.accept(item, campaign, version);
+                    nodeSetter.accept(node, campaign, this, version);
                 }
             } catch (Exception ex) {
                 LOGGER.error("Failed to load node {}", nodeName, ex);
@@ -681,20 +686,20 @@ public abstract class AbstractContract {
     }
 
     /**
-     * Instantiates the correct {@link AbstractMissionTransition} subclass from XML and fully loads its state. The
-     * concrete type is determined by the {@code type} attribute on the node, identical to before.
+     * Instantiates the correct {@link AbstractContract} subclass from XML and fully loads its state. The concrete type
+     * is determined by the {@code type} attribute on the node, identical to before.
      * <p>
      * Callers that previously used {@code Mission.generateInstanceFromXML} should migrate to this method; the static
      * delegate on {@link Mission} is preserved only for backward compatibility.
      */
-    public static AbstractMissionTransition generateInstanceFromXML(Node node, Campaign campaign, Version version) {
-        AbstractMissionTransition retVal = null;
+    public static AbstractContract generateInstanceFromXML(Node node, Campaign campaign, Version version) {
+        AbstractContract retVal = null;
         NamedNodeMap nodeAttributes = node.getAttributes();
         Node classNameNode = nodeAttributes.getNamedItem("type");
         String className = classNameNode.getTextContent();
 
         try {
-            retVal = (AbstractMissionTransition) Class.forName(className).getDeclaredConstructor().newInstance();
+            retVal = (AbstractContract) Class.forName(className).getDeclaredConstructor().newInstance();
             retVal.loadFieldsFromXmlNode(campaign, version, node);
         } catch (Exception ex) {
             LOGGER.error("", ex);
@@ -712,6 +717,11 @@ public abstract class AbstractContract {
 
     @FunctionalInterface
     public interface NodeSetter {
-        void accept(Node node, Campaign campaign, Version version);
+        void accept(Node node, Campaign campaign, AbstractContract contract, Version version);
+    }
+
+    @FunctionalInterface
+    public interface FieldSetter {
+        void accept(AbstractContract contract, String value, Campaign campaign);
     }
 }

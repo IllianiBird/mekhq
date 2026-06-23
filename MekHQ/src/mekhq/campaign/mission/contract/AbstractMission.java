@@ -50,7 +50,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 import jakarta.annotation.Nonnull;
@@ -94,7 +93,7 @@ public abstract class AbstractMission {
     private static final String RESOURCE_BUNDLE = "mekhq.resources.AbstractMission";
 
     private String name;
-    private UUID uuid = UUID.randomUUID();
+    private int id = -1; // TODO change to UUID
     private AbstractContract parentContract;
     private StratConCampaignState stratConCampaignState;
     private MissionStatus status = MissionStatus.ACTIVE;
@@ -170,12 +169,12 @@ public abstract class AbstractMission {
         this.name = name;
     }
 
-    public UUID getUUID() {
-        return uuid;
+    public int getId() {
+        return id;
     }
 
-    public void setUUID(UUID uuid) {
-        this.uuid = uuid;
+    public void setId(int uuid) {
+        this.id = uuid;
     }
 
     public String getSystemId() {
@@ -671,7 +670,7 @@ public abstract class AbstractMission {
 
         TransportCostCalculations transportCostCalculations = campaign.getTransportCostCalculation(EXP_REGULAR);
         boolean useTwoWayPay = campaign.getCampaignOptions().isUseTwoWayPay();
-        boolean isUseCommandCircuits = campaign.isUseCommandCircuitForContract(this);
+        boolean isUseCommandCircuits = campaign.isUseCommandCircuitForContract(parentContract);
         int duration = (int) ceil(jumpPath.getTotalTime(campaign.getLocalDate(),
               campaign.getCurrentLocation().getTransitTime(), isUseCommandCircuits));
         Money transportCost = transportCostCalculations.calculateJumpCostForEntireJourney(duration,
@@ -852,7 +851,7 @@ public abstract class AbstractMission {
      * @param scenario the scenario to add this mission
      */
     public void addScenario(final Scenario scenario) {
-        scenario.setMissionId(uuid);
+        scenario.setMissionId(id);
         getScenarios().add(scenario);
     }
 
@@ -881,6 +880,14 @@ public abstract class AbstractMission {
 
     public void clearScenarios() {
         scenarios.clear();
+    }
+
+    public AbstractContract getParentContract() {
+        return parentContract;
+    }
+
+    public void setParentContract(final AbstractContract parentContract) {
+        this.parentContract = parentContract;
     }
 
     public StratConCampaignState getStratConCampaignState() {

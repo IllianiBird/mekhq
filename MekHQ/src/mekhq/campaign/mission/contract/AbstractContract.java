@@ -36,19 +36,27 @@ import static mekhq.campaign.mission.RandomFactionCamouflage.pickRandomCamouflag
 import static mekhq.campaign.mission.enums.ContractCommandRights.INDEPENDENT;
 import static mekhq.campaign.personnel.ranks.Rank.RO_MIN;
 import static mekhq.campaign.universe.Faction.INDEPENDENT_FACTION_CODE;
+import static mekhq.utilities.MHQInternationalization.getFormattedTextAt;
 import static mekhq.utilities.MHQInternationalization.getTextAt;
 
+import java.io.PrintWriter;
 import java.math.RoundingMode;
+import java.text.ParseException;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.BiConsumer;
 
 import jakarta.annotation.Nullable;
+import megamek.Version;
 import megamek.common.enums.Gender;
 import megamek.logging.MMLogger;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.finances.Money;
 import mekhq.campaign.mission.AbstractMissionTransition;
+import mekhq.campaign.mission.Mission;
 import mekhq.campaign.mission.enums.ContractCommandRights;
 import mekhq.campaign.mission.enums.MissionStatus;
 import mekhq.campaign.personnel.Person;
@@ -57,6 +65,10 @@ import mekhq.campaign.personnel.ranks.AutoAssignRankForCompanyGenerator;
 import mekhq.campaign.unit.Unit;
 import mekhq.campaign.universe.Faction;
 import mekhq.campaign.universe.Factions;
+import mekhq.utilities.MHQXMLUtility;
+import org.w3c.dom.NamedNodeMap;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 public abstract class AbstractContract {
     private static final MMLogger LOGGER = MMLogger.create(AbstractContract.class);
@@ -107,6 +119,9 @@ public abstract class AbstractContract {
     private int contractNegotiationTransportRoll;
 
     private final List<AbstractMission> missions = new ArrayList<>();
+
+    protected final Map<String, BiConsumer<String, Campaign>> fieldSetters = initializeFieldSetters();
+    protected final Map<String, AbstractMissionTransition.NodeSetter> nodeSetters = new HashMap<>();
 
     AbstractContract() {}
 
@@ -508,5 +523,195 @@ public abstract class AbstractContract {
      */
     public void addMission(final AbstractMission mission) {
         getMissions().add(mission);
+    }
+
+    public void writeToXML(Campaign campaign, final PrintWriter printWriter, int indent) {
+        indent = writeToXMLBegin(campaign, printWriter, indent);
+        writeToXMLEnd(printWriter, indent);
+    }
+
+    /**
+     * Writes all {@link AbstractMissionTransition} fields to XML. Subclasses that have their own private fields must
+     * override this, call {@code super.writeToXMLBegin(...)}, append only their private tags, and return the resulting
+     * indent.
+     */
+    protected int writeToXMLBegin(Campaign campaign, final PrintWriter printWriter, int indent) {
+        // opening tag and core identity
+        MHQXMLUtility.writeSimpleXMLOpenTag(printWriter, indent++, "mission", "id", getId(), "type", getClass());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "name", getName());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "status", getStatus().name());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "desc", getDescription());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "id", getId());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "difficulty", getContractDifficulty());
+
+        // contract financials and terms
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "employer", getEmployerName());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "employerCode", getEmployerCode());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "paymentMultiplier", getPaymentMultiplier());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "commandRights", getCommandRights().name());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "overheadComp", getOverheadCompensation());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvagePct", getSalvagePercent());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvageExchange", isSalvageExchange());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "straightSupport", getStraightSupport());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "battleLossComp", getBattleLossCompensation());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "transportComp", getTransportCompensation());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "mrbcFee", isPaidMRBCFee());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "advancePct", getAdvancePercent());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "signBonus", getSigningBonus());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvagedByUnit", getSalvagedByUnit());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvagedByEmployer", getSalvagedByEmployer());
+
+        // combat requirements and state
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "sharesPct", getSharesPercent());
+
+        // negotiation roll results
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "commandRoll", getContractNegotiationCommandRoll());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvageRoll", getContractNegotiationSalvageRoll());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "supportRoll", getContractNegotiationSupportRoll());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "transportRoll", getContractNegotiationTransportRoll());
+
+        // NPCs
+        if (getEmployerLiaison() != null) {
+            MHQXMLUtility.writeSimpleXMLOpenTag(printWriter, indent++, "employerLiaison");
+            getEmployerLiaison().writeToXMLHeadless(printWriter, indent, campaign);
+            MHQXMLUtility.writeSimpleXMLCloseTag(printWriter, --indent, "employerLiaison");
+        }
+
+        return indent;
+    }
+
+    protected void writeToXMLEnd(final PrintWriter pw, int indent) {
+        MHQXMLUtility.writeSimpleXMLCloseTag(pw, --indent, "mission");
+    }
+
+    protected void initializeFieldSetters() {
+        // core identity
+        fieldSetters.put("name",
+              (v, c) -> setName(v.trim()));
+        fieldSetters.put("status",
+              (v, c) -> setStatus(MissionStatus.parseFromString(v.trim())));
+        fieldSetters.put("id",
+              (v, c) -> setId(Integer.parseInt(v.trim())));
+        fieldSetters.put("desc",
+              (v, c) -> setDescription(v.trim()));
+
+        // contract financials and terms
+        fieldSetters.put("employer",
+              (v, c) -> setEmployerName(v.trim()));
+        fieldSetters.put("paymentmultiplier",
+              (v, c) -> setPaymentMultiplier(Double.parseDouble(v.trim())));
+        fieldSetters.put("commandrights",
+              (v, c) -> setCommandRights(ContractCommandRights.parseFromString(v.trim())));
+        fieldSetters.put("overheadcomp",
+              (v, c) -> setOverheadCompensation(Integer.parseInt(v.trim())));
+        fieldSetters.put("salvagepct",
+              (v, c) -> setSalvagePercent(Integer.parseInt(v.trim())));
+        fieldSetters.put("salvageexchange",
+              (v, c) -> setSalvageExchange(Boolean.parseBoolean(v.trim())));
+        fieldSetters.put("straightsupport",
+              (v, c) -> setStraightSupport(Integer.parseInt(v.trim())));
+        fieldSetters.put("battlelosscomp",
+              (v, c) -> setBattleLossCompensation(Integer.parseInt(v.trim())));
+        fieldSetters.put("transportcomp",
+              (v, c) -> setTransportCompensation(Integer.parseInt(v.trim())));
+        fieldSetters.put("advancepct",
+              (v, c) -> setAdvancePercent(Integer.parseInt(v.trim())));
+        fieldSetters.put("signbonus",
+              (v, c) -> setSigningBonus(Integer.parseInt(v.trim())));
+        fieldSetters.put("mrbcfee",
+              (v, c) -> setPaidMRBCFee(v.trim().equals("true")));
+        fieldSetters.put("salvagedbyunit",
+              (v, c) -> setSalvagedByUnit(Money.fromXmlString(v.trim())));
+        fieldSetters.put("salvagedbyemployer",
+              (v, c) -> setSalvagedByEmployer(Money.fromXmlString(v.trim())));
+
+        // faction and force data
+        fieldSetters.put("employercode",
+              (v, c) -> setEmployerCode(v.trim()));
+        fieldSetters.put("difficulty",
+              (v, c) -> setContractDifficulty(Integer.parseInt(v.trim())));
+        fieldSetters.put("sharespct",
+              (v, c) -> setSharesPercent(Integer.parseInt(v.trim())));
+
+        // negotiation roll results
+        fieldSetters.put("commandroll",
+              (v, c) -> setContractNegotiationCommandRoll(Integer.parseInt(v.trim())));
+        fieldSetters.put("salvageroll",
+              (v, c) -> setContractNegotiationSalvageRoll(Integer.parseInt(v.trim())));
+        fieldSetters.put("supportroll",
+              (v, c) -> setContractNegotiationSupportRoll(Integer.parseInt(v.trim())));
+        fieldSetters.put("transportroll",
+              (v, c) -> setContractNegotiationTransportRoll(Integer.parseInt(v.trim())));
+    }
+
+    protected void initializeNodeSetters() {
+        // NPCs
+        nodeSetters.put("employerliaison",
+              (node, campaign, version) -> setEmployerLiaison(Person.generateInstanceFromXML(node, campaign, version)));
+    }
+
+    public void loadFieldsFromXmlNode(Campaign campaign, Version version, Node node) throws ParseException {
+        NodeList nodeList = node.getChildNodes();
+        for (int i = 0; i < nodeList.getLength(); i++) {
+            Node item = nodeList.item(i);
+
+            if (item.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+
+            String nodeName = item.getNodeName().trim().toLowerCase();
+
+            try {
+                BiConsumer<String, Campaign> fieldSetter = fieldSetters.get(nodeName);
+
+                if (fieldSetter != null) {
+                    fieldSetter.accept(item.getTextContent(), campaign);
+                    continue;
+                }
+
+                AbstractMissionTransition.NodeSetter nodeSetter = nodeSetters.get(nodeName);
+
+                if (nodeSetter != null) {
+                    nodeSetter.accept(item, campaign, version);
+                }
+            } catch (Exception ex) {
+                LOGGER.error("Failed to load node {}", nodeName, ex);
+            }
+        }
+    }
+
+    /**
+     * Instantiates the correct {@link AbstractMissionTransition} subclass from XML and fully loads its state. The
+     * concrete type is determined by the {@code type} attribute on the node, identical to before.
+     * <p>
+     * Callers that previously used {@code Mission.generateInstanceFromXML} should migrate to this method; the static
+     * delegate on {@link Mission} is preserved only for backward compatibility.
+     */
+    public static AbstractMissionTransition generateInstanceFromXML(Node node, Campaign campaign, Version version) {
+        AbstractMissionTransition retVal = null;
+        NamedNodeMap nodeAttributes = node.getAttributes();
+        Node classNameNode = nodeAttributes.getNamedItem("type");
+        String className = classNameNode.getTextContent();
+
+        try {
+            retVal = (AbstractMissionTransition) Class.forName(className).getDeclaredConstructor().newInstance();
+            retVal.loadFieldsFromXmlNode(campaign, version, node);
+        } catch (Exception ex) {
+            LOGGER.error("", ex);
+        }
+
+        return retVal;
+    }
+
+    @Override
+    public String toString() {
+        return !getStatus().isCompleted() ?
+                     getName() :
+                     getFormattedTextAt(RESOURCE_BUNDLE, "AbstractContract.name.completed", getName());
+    }
+
+    @FunctionalInterface
+    public interface NodeSetter {
+        void accept(Node node, Campaign campaign, Version version);
     }
 }

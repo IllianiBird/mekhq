@@ -32,5 +32,71 @@
  */
 package mekhq.campaign.mission.contract;
 
+import static mekhq.campaign.mission.enums.ContractCommandRights.INDEPENDENT;
+import static mekhq.campaign.universe.Faction.INDEPENDENT_FACTION_CODE;
+import static mekhq.utilities.MHQInternationalization.getTextAt;
+
+import megamek.logging.MMLogger;
+import mekhq.campaign.finances.Money;
+import mekhq.campaign.mission.enums.ContractCommandRights;
+import mekhq.campaign.mission.enums.MissionStatus;
+import mekhq.campaign.personnel.Person;
+
 public abstract class AbstractContract {
+    private static final MMLogger LOGGER = MMLogger.create(AbstractContract.class);
+    private static final String RESOURCE_BUNDLE = "mekhq.resources.AbstractContract";
+
+    public final static int OH_NONE = 0;
+    public final static int OH_HALF = 1;
+    public final static int OH_FULL = 2;
+    public final static int OH_NUM = 3;
+
+    private final static int MRBC_FEE_PERCENTAGE = 5;
+    private final static int DEFAULT_SHARES_PERCENT = 30;
+    public static final int UNKNOWN_DIFFICULTY = -99;
+
+    private String name;
+    private int id = -1;
+    private MissionStatus status = MissionStatus.ACTIVE;
+    private String description;
+
+    private String employerCode = INDEPENDENT_FACTION_CODE;
+    private String employerName = getTextAt(RESOURCE_BUNDLE, "AbstractContract.belligerentName.default");
+    private Person employerLiaison;
+
+    private int contractDifficulty = 5;
+
+    private double paymentMultiplier = 1.0;
+    private ContractCommandRights commandRights = INDEPENDENT;
+    private int overheadCompensation = OH_NONE;
+    private int straightSupport;
+    private int battleLossCompensation;
+    private int salvagePercent;
+    private int transportCompensation;
+
+    // need to keep track of total value salvaged for salvage rights
+    private boolean salvageExchange;
+    private Money salvagedByUnit = Money.zero();
+    private Money salvagedByEmployer = Money.zero();
+
+    // actual amounts
+    private Money advanceAmount = Money.zero();
+    private Money signingBonusAmount = Money.zero();
+    private Money transportAmount = Money.zero();
+    private Money transitAmount = Money.zero();
+    private Money overheadAmount = Money.zero();
+    private Money supportAmount = Money.zero();
+    private Money baseAmount = Money.zero();
+    private Money feeAmount = Money.zero();
+
+    private boolean paidMRBCFee = true;
+    private int mrbcFeePercent = MRBC_FEE_PERCENTAGE;
+    private int sharesPercent = DEFAULT_SHARES_PERCENT;
+    private int advancePercent;
+    private int signingBonus;
+
+    private int contractNegotiationCommandRoll;
+    private int contractNegotiationSalvageRoll;
+    private int contractNegotiationSupportRoll;
+    private int contractNegotiationTransportRoll;
 }

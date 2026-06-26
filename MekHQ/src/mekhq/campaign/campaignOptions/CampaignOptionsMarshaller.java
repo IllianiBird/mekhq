@@ -335,6 +335,14 @@ public class CampaignOptionsMarshaller {
               indent,
               "rewardComingOfAgeRPSkills",
               campaignOptions.isRewardComingOfAgeRPSkills());
+        MHQXMLUtility.writeSimpleXMLTag(pw,
+              indent,
+              "getRandomSPAPurchaseCost",
+              campaignOptions.getRandomSPAPurchaseCost());
+        MHQXMLUtility.writeSimpleXMLTag(pw,
+              indent,
+              "isAllowRandomSPAPurchaseFlaws",
+              campaignOptions.isAllowRandomSPAPurchaseFlaws());
         // endregion General Personnel
 
         // region Expanded Personnel Information

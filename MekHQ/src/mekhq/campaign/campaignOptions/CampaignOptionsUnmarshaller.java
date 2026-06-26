@@ -369,6 +369,10 @@ public class CampaignOptionsUnmarshaller {
                   nodeContents));
             case "rewardComingOfAgeRPSkills" -> campaignOptions.setRewardComingOfAgeRPSkills(parseBoolean(
                   nodeContents));
+            case "getRandomSPAPurchaseCost" -> campaignOptions.setRandomSPAPurchaseCost(parseInt(
+                  nodeContents));
+            case "setAllowRandomSPAPurchaseFlaws" -> campaignOptions.setAllowRandomSPAPurchaseFlaws(parseBoolean(
+                  nodeContents));
             case "useTimeInService" -> campaignOptions.setUseTimeInService(parseBoolean(nodeContents));
             case "timeInServiceDisplayFormat" ->
                   campaignOptions.setTimeInServiceDisplayFormat(TimeInDisplayFormat.valueOf(

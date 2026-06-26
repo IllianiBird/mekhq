@@ -105,6 +105,7 @@ import megamek.client.ratgenerator.CrewDescriptor;
 import megamek.client.ui.dialogs.iconChooser.PortraitChooserDialog;
 import megamek.codeUtilities.MathUtility;
 import megamek.codeUtilities.ObjectUtility;
+import megamek.codeUtilities.StringUtility;
 import megamek.common.equipment.Mounted;
 import megamek.common.options.IOption;
 import megamek.common.options.OptionsConstants;
@@ -249,6 +250,7 @@ public class PersonnelTableMouseAdapter extends JPopupMenuAdapter {
     private static final String CMD_ACQUIRE_ENVIRONMENT_SPECIALIST = "ENVIRONMENT_SPECIALIST";
     private static final String CMD_ACQUIRE_HUMAN_TRO = "HUMAN_TRO";
     private static final String CMD_ACQUIRE_ABILITY = "ABILITY";
+    private static final String CMD_BUY_RANDOM_ABILITY = "BUY_RANDOM_ABILITY";
     private static final String CMD_ACQUIRE_CUSTOM_CHOICE = "CUSTOM_CHOICE";
     private static final String CMD_BUY_OFF_FLAW = "BUY_OFF_FLAW";
     private static final String CMD_REFUND_SKILL = "REFUND_SKILL";
@@ -1765,6 +1767,10 @@ public class PersonnelTableMouseAdapter extends JPopupMenuAdapter {
                 }
                 break;
             }
+            case CMD_BUY_RANDOM_ABILITY: {
+                purchaseRandomSPA(data, people, selectedPerson);
+                break;
+            }
             case CMD_GENERATE_ROLEPLAY_SKILLS: {
                 RandomSkillPreferences skillPreferences = getCampaign().getRandomSkillPreferences();
                 AbstractSkillGenerator skillGenerator = new DefaultSkillGenerator(skillPreferences);
@@ -1904,6 +1910,48 @@ public class PersonnelTableMouseAdapter extends JPopupMenuAdapter {
 
             default: {
                 break;
+            }
+        }
+    }
+
+    private void purchaseRandomSPA(String[] data, Person[] people, Person selectedPerson) {
+        final boolean isUseReasoningMultiplier = MathUtility.parseBoolean(data[1]);
+        final double xpCostMultiplier = MathUtility.parseDouble(data[2]);
+        final boolean allowFlaws = MathUtility.parseBoolean(data[3]);
+        int baseCost = MathUtility.parseInt(data[4]);
+
+        SingleSpecialAbilityGenerator singleSpecialAbilityGenerator = new SingleSpecialAbilityGenerator();
+        for (Person person : people) {
+            double reasoningXpCostMultiplier = person.getReasoningXpCostMultiplier(isUseReasoningMultiplier);
+
+            // Reasoning cost changes should always take place before global changes
+            int cost = (int) round(baseCost * reasoningXpCostMultiplier);
+            cost = (int) round(cost * xpCostMultiplier);
+
+            if (person.getXP() < cost) {
+                continue;
+            }
+
+            String newSPA = singleSpecialAbilityGenerator.rollSPA(getCampaign(),
+                  person,
+                  true,
+                  false,
+                  true,
+                  !allowFlaws);
+
+            if (!StringUtility.isNullOrBlank(newSPA)) {
+                selectedPerson.spendXP(cost);
+
+                PerformanceLogger.gainedSPA(getCampaign(),
+                      selectedPerson,
+                      getCampaign().getLocalDate(),
+                      newSPA);
+
+                getCampaign().addReport(PERSONNEL, getFormattedText("gained.format",
+                      selectedPerson.getHyperlinkedName(),
+                      newSPA));
+
+                MekHQ.triggerEvent(new PersonChangedEvent(person));
             }
         }
     }
@@ -2949,1013 +2997,1036 @@ public class PersonnelTableMouseAdapter extends JPopupMenuAdapter {
         popup.add(menu);
 
         final boolean isUseReasoningMultiplier = getCampaignOptions().isUseReasoningXpMultiplier();
+        final double xpCostMultiplier = getCampaignOptions().getXpCostMultiplier();
         addEdgeRefreshOption(oneSelected, person, isUseReasoningMultiplier, menu);
 
-        if (oneSelected && person.getStatus().isActiveFlexible()) {
-            final double reasoningXpCostMultiplier = person.getReasoningXpCostMultiplier(isUseReasoningMultiplier);
-            final double xpCostMultiplier = getCampaignOptions().getXpCostMultiplier();
-
+        if (getCampaignOptions().isUseAbilities() && person.getStatus().isActiveFlexible()) {
             submenu = new JMenu(resources.getString("abilities.text"));
             menu.add(submenu);
-            if (getCampaignOptions().isUseAbilities()) {
-                JMenu combatAbilityMenu = new JMenu(resources.getString("combatAbilityMenu.text"));
-                submenu.add(combatAbilityMenu);
 
-                JMenu maneuveringAbilityMenu = new JMenu(resources.getString("maneuveringAbilityMenu.text"));
-                submenu.add(maneuveringAbilityMenu);
+            addBuyRandomAbilityMenuOption(isUseReasoningMultiplier, submenu, oneSelected, selected, xpCostMultiplier);
 
-                JMenu utilityAbilityMenu = new JMenu(resources.getString("utilityAbilityMenu.text"));
-                submenu.add(utilityAbilityMenu);
+            if (oneSelected) {
+                final double reasoningXpCostMultiplier = person.getReasoningXpCostMultiplier(isUseReasoningMultiplier);
 
-                JMenu characterOriginMenu = new JMenu(resources.getString("characterOriginMenu.text"));
-                if (getCampaign().isGM()) {
-                    submenu.add(characterOriginMenu);
-                }
+                if (getCampaignOptions().isUseAbilities()) {
+                    JMenu combatAbilityMenu = new JMenu(resources.getString("combatAbilityMenu.text"));
+                    submenu.add(combatAbilityMenu);
 
-                JMenu characterFlawMenu = new JMenu(resources.getString("characterFlawMenu.text"));
-                submenu.add(characterFlawMenu);
+                    JMenu maneuveringAbilityMenu = new JMenu(resources.getString("maneuveringAbilityMenu.text"));
+                    submenu.add(maneuveringAbilityMenu);
 
-                JMenu characterBuyOffFlawMenu = new JMenu(resources.getString("characterBuyOffFlawMenu.text"));
-                submenu.add(characterBuyOffFlawMenu);
+                    JMenu utilityAbilityMenu = new JMenu(resources.getString("utilityAbilityMenu.text"));
+                    submenu.add(utilityAbilityMenu);
 
-                List<SpecialAbility> specialAbilities = new ArrayList<>(SpecialAbility.getSpecialAbilities().values());
-                specialAbilities.sort(Comparator.comparing(SpecialAbility::getName));
-
-                List<SpecialAbility> eligibleAbilities = new ArrayList<>();
-                List<SpecialAbility> notEligibleAbilities = new ArrayList<>();
-                List<SpecialAbility> alreadyPurchasedFlaws = new ArrayList<>();
-                for (SpecialAbility spa : specialAbilities) {
-                    if (null == spa) {
-                        continue;
-                    }
-                    if (spa.isEligible(person)) {
-                        eligibleAbilities.add(spa);
-                    } else {
-                        notEligibleAbilities.add(spa);
+                    JMenu characterOriginMenu = new JMenu(resources.getString("characterOriginMenu.text"));
+                    if (getCampaign().isGM()) {
+                        submenu.add(characterOriginMenu);
                     }
 
-                    if (spa.getCost() < 0 && person.getOptions().booleanOption(spa.getName())) {
-                        alreadyPurchasedFlaws.add(spa);
-                    }
-                }
+                    JMenu characterFlawMenu = new JMenu(resources.getString("characterFlawMenu.text"));
+                    submenu.add(characterFlawMenu);
 
-                for (SpecialAbility spa : eligibleAbilities) {
-                    addSPAToMenu(spa,
-                          reasoningXpCostMultiplier,
-                          xpCostMultiplier,
-                          person,
-                          combatAbilityMenu,
-                          maneuveringAbilityMenu,
-                          utilityAbilityMenu,
-                          characterFlawMenu,
-                          characterOriginMenu,
-                          true);
-                }
+                    JMenu characterBuyOffFlawMenu = new JMenu(resources.getString("characterBuyOffFlawMenu.text"));
+                    submenu.add(characterBuyOffFlawMenu);
 
-                if (!eligibleAbilities.isEmpty()) {
-                    combatAbilityMenu.addSeparator();
-                    maneuveringAbilityMenu.addSeparator();
-                    utilityAbilityMenu.addSeparator();
-                    characterFlawMenu.addSeparator();
-                    characterOriginMenu.addSeparator();
-                }
+                    List<SpecialAbility> specialAbilities = new ArrayList<>(SpecialAbility.getSpecialAbilities()
+                                                                                  .values());
+                    specialAbilities.sort(Comparator.comparing(SpecialAbility::getName));
 
-                for (SpecialAbility spa : notEligibleAbilities) {
-                    addSPAToMenu(spa,
-                          reasoningXpCostMultiplier,
-                          xpCostMultiplier,
-                          person,
-                          combatAbilityMenu,
-                          maneuveringAbilityMenu,
-                          utilityAbilityMenu,
-                          characterFlawMenu,
-                          characterOriginMenu,
-                          false);
-                }
-
-                for (SpecialAbility flaw : alreadyPurchasedFlaws) {
-                    addAlreadyPurchasedFlawToMenu(flaw,
-                          xpCostMultiplier,
-                          person,
-                          characterBuyOffFlawMenu);
-                }
-            }
-
-            JMenu currentMenu = new JMenu(resources.getString("spendOnCurrentSkills.text"));
-            JMenu combatGunnerySkillsCurrent = new JMenu(resources.getString("combatGunnerySkills.text"));
-            JMenu combatPilotingSkillsCurrent = new JMenu(resources.getString("combatPilotingSkills.text"));
-            JMenu supportSkillsCurrent = new JMenu(resources.getString("supportSkills.text"));
-            JMenu utilitySkillsCurrent = new JMenu(resources.getString("utilitySkills.text"));
-            JMenu roleplaySkillsCurrent = new JMenu(resources.getString("roleplaySkills.text"));
-            JMenu roleplaySkillsArtCurrent = new JMenu(resources.getString("roleplaySkills.art"));
-            JMenu roleplaySkillsInterestCurrent = new JMenu(resources.getString("roleplaySkills.interest"));
-            JMenu roleplaySkillsScienceCurrent = new JMenu(resources.getString("roleplaySkills.science"));
-
-            JMenu newSkillsMenu = new JMenu(resources.getString("spendOnNewSkills.text"));
-            JMenu combatGunnerySkillsNew = new JMenu(resources.getString("combatGunnerySkills.text"));
-            JMenu combatPilotingSkillsNew = new JMenu(resources.getString("combatPilotingSkills.text"));
-            JMenu supportSkillsNew = new JMenu(resources.getString("supportSkills.text"));
-            JMenu utilitySkillsNew = new JMenu(resources.getString("utilitySkills.text"));
-            JMenu roleplaySkillsNew = new JMenu(resources.getString("roleplaySkills.text"));
-            JMenu roleplaySkillsArtNew = new JMenu(resources.getString("roleplaySkills.art"));
-            JMenu roleplaySkillsInterestNew = new JMenu(resources.getString("roleplaySkills.interest"));
-            JMenu roleplaySkillsScienceNew = new JMenu(resources.getString("roleplaySkills.science"));
-
-            boolean adminsHaveNegotiation = getCampaignOptions().isAdminsHaveNegotiation();
-            boolean doctorsUseAdmin = getCampaignOptions().isDoctorsUseAdministration();
-            boolean techsUseAdmin = getCampaignOptions().isTechsUseAdministration();
-            boolean isUseArtillery = getCampaignOptions().isUseArtillery();
-            PersonnelRole primaryProfession = person.getPrimaryRole();
-            List<String> primaryProfessionSkills = primaryProfession.getSkillsForProfession(adminsHaveNegotiation,
-                  doctorsUseAdmin,
-                  techsUseAdmin,
-                  isUseArtillery,
-                  true);
-
-            PersonnelRole secondaryProfession = person.getSecondaryRole();
-            List<String> secondaryProfessionSkills = new ArrayList<>(secondaryProfession.getSkillsForProfession(
-                  adminsHaveNegotiation,
-                  doctorsUseAdmin,
-                  techsUseAdmin,
-                  isUseArtillery,
-                  true));
-            secondaryProfessionSkills.removeAll(primaryProfessionSkills);
-
-            for (int i = 0; i < SkillType.getSkillList().length; i++) {
-                String typeName = SkillType.getSkillList()[i];
-
-                int cost = person.getCostToImprove(typeName, isUseReasoningMultiplier);
-                cost = (int) round(cost * xpCostMultiplier);
-
-                if (cost >= 0) {
-                    Skill skill = person.getSkill(typeName);
-                    if (skill != null) {
-                        cost = max(0, cost - skill.getXpProgress());
-                    }
-
-                    if (Objects.equals(typeName, S_ARTILLERY)) {
-                        if (!getCampaignOptions().isUseArtillery()) {
+                    List<SpecialAbility> eligibleAbilities = new ArrayList<>();
+                    List<SpecialAbility> notEligibleAbilities = new ArrayList<>();
+                    List<SpecialAbility> alreadyPurchasedFlaws = new ArrayList<>();
+                    for (SpecialAbility spa : specialAbilities) {
+                        if (null == spa) {
                             continue;
+                        }
+                        if (spa.isEligible(person)) {
+                            eligibleAbilities.add(spa);
+                        } else {
+                            notEligibleAbilities.add(spa);
+                        }
+
+                        if (spa.getCost() < 0 && person.getOptions().booleanOption(spa.getName())) {
+                            alreadyPurchasedFlaws.add(spa);
                         }
                     }
 
-                    String description;
-                    if (primaryProfessionSkills.contains(typeName)) {
-                        description = String.format(resources.getString("skillDesc.format.profession"),
-                              ReportingUtilities.spanOpeningWithCustomColor(getAmazingColor()), CLOSING_SPAN_TAG,
-                              typeName, cost);
-                    } else if (secondaryProfessionSkills.contains(typeName)) {
-                        description = String.format(resources.getString("skillDesc.format.profession"),
-                              ReportingUtilities.spanOpeningWithCustomColor(getPositiveColor()), CLOSING_SPAN_TAG,
-                              typeName, cost);
-                    } else {
-                        description = String.format(resources.getString("skillDesc.format"), typeName, cost);
+                    for (SpecialAbility spa : eligibleAbilities) {
+                        addSPAToMenu(spa,
+                              reasoningXpCostMultiplier,
+                              xpCostMultiplier,
+                              person,
+                              combatAbilityMenu,
+                              maneuveringAbilityMenu,
+                              utilityAbilityMenu,
+                              characterFlawMenu,
+                              characterOriginMenu,
+                              true);
                     }
 
-                    SkillModifierData skillModifierData =
-                          person.getSkillModifierData(getCampaignOptions().isUseAgeEffects(),
-                                getCampaign().isClanCampaign(), getCampaign().getLocalDate());
+                    if (!eligibleAbilities.isEmpty()) {
+                        combatAbilityMenu.addSeparator();
+                        maneuveringAbilityMenu.addSeparator();
+                        utilityAbilityMenu.addSeparator();
+                        characterFlawMenu.addSeparator();
+                        characterOriginMenu.addSeparator();
+                    }
 
-                    menuItem = new JMenuItem(description);
-                    menuItem.setActionCommand(makeCommand(CMD_IMPROVE, typeName, String.valueOf(cost)));
-                    menuItem.addActionListener(this);
-                    menuItem.setEnabled(person.getXP() >= cost);
-                    if (skill != null) {
-                        if (skill.isImprovementLegal()) {
+                    for (SpecialAbility spa : notEligibleAbilities) {
+                        addSPAToMenu(spa,
+                              reasoningXpCostMultiplier,
+                              xpCostMultiplier,
+                              person,
+                              combatAbilityMenu,
+                              maneuveringAbilityMenu,
+                              utilityAbilityMenu,
+                              characterFlawMenu,
+                              characterOriginMenu,
+                              false);
+                    }
+
+                    for (SpecialAbility flaw : alreadyPurchasedFlaws) {
+                        addAlreadyPurchasedFlawToMenu(flaw,
+                              xpCostMultiplier,
+                              person,
+                              characterBuyOffFlawMenu);
+                    }
+                }
+
+                JMenu currentMenu = new JMenu(resources.getString("spendOnCurrentSkills.text"));
+                JMenu combatGunnerySkillsCurrent = new JMenu(resources.getString("combatGunnerySkills.text"));
+                JMenu combatPilotingSkillsCurrent = new JMenu(resources.getString("combatPilotingSkills.text"));
+                JMenu supportSkillsCurrent = new JMenu(resources.getString("supportSkills.text"));
+                JMenu utilitySkillsCurrent = new JMenu(resources.getString("utilitySkills.text"));
+                JMenu roleplaySkillsCurrent = new JMenu(resources.getString("roleplaySkills.text"));
+                JMenu roleplaySkillsArtCurrent = new JMenu(resources.getString("roleplaySkills.art"));
+                JMenu roleplaySkillsInterestCurrent = new JMenu(resources.getString("roleplaySkills.interest"));
+                JMenu roleplaySkillsScienceCurrent = new JMenu(resources.getString("roleplaySkills.science"));
+
+                JMenu newSkillsMenu = new JMenu(resources.getString("spendOnNewSkills.text"));
+                JMenu combatGunnerySkillsNew = new JMenu(resources.getString("combatGunnerySkills.text"));
+                JMenu combatPilotingSkillsNew = new JMenu(resources.getString("combatPilotingSkills.text"));
+                JMenu supportSkillsNew = new JMenu(resources.getString("supportSkills.text"));
+                JMenu utilitySkillsNew = new JMenu(resources.getString("utilitySkills.text"));
+                JMenu roleplaySkillsNew = new JMenu(resources.getString("roleplaySkills.text"));
+                JMenu roleplaySkillsArtNew = new JMenu(resources.getString("roleplaySkills.art"));
+                JMenu roleplaySkillsInterestNew = new JMenu(resources.getString("roleplaySkills.interest"));
+                JMenu roleplaySkillsScienceNew = new JMenu(resources.getString("roleplaySkills.science"));
+
+                boolean adminsHaveNegotiation = getCampaignOptions().isAdminsHaveNegotiation();
+                boolean doctorsUseAdmin = getCampaignOptions().isDoctorsUseAdministration();
+                boolean techsUseAdmin = getCampaignOptions().isTechsUseAdministration();
+                boolean isUseArtillery = getCampaignOptions().isUseArtillery();
+                PersonnelRole primaryProfession = person.getPrimaryRole();
+                List<String> primaryProfessionSkills = primaryProfession.getSkillsForProfession(adminsHaveNegotiation,
+                      doctorsUseAdmin,
+                      techsUseAdmin,
+                      isUseArtillery,
+                      true);
+
+                PersonnelRole secondaryProfession = person.getSecondaryRole();
+                List<String> secondaryProfessionSkills = new ArrayList<>(secondaryProfession.getSkillsForProfession(
+                      adminsHaveNegotiation,
+                      doctorsUseAdmin,
+                      techsUseAdmin,
+                      isUseArtillery,
+                      true));
+                secondaryProfessionSkills.removeAll(primaryProfessionSkills);
+
+                for (int i = 0; i < SkillType.getSkillList().length; i++) {
+                    String typeName = SkillType.getSkillList()[i];
+
+                    int cost = person.getCostToImprove(typeName, isUseReasoningMultiplier);
+                    cost = (int) round(cost * xpCostMultiplier);
+
+                    if (cost >= 0) {
+                        Skill skill = person.getSkill(typeName);
+                        if (skill != null) {
+                            cost = max(0, cost - skill.getXpProgress());
+                        }
+
+                        if (Objects.equals(typeName, S_ARTILLERY)) {
+                            if (!getCampaignOptions().isUseArtillery()) {
+                                continue;
+                            }
+                        }
+
+                        String description;
+                        if (primaryProfessionSkills.contains(typeName)) {
+                            description = String.format(resources.getString("skillDesc.format.profession"),
+                                  ReportingUtilities.spanOpeningWithCustomColor(getAmazingColor()), CLOSING_SPAN_TAG,
+                                  typeName, cost);
+                        } else if (secondaryProfessionSkills.contains(typeName)) {
+                            description = String.format(resources.getString("skillDesc.format.profession"),
+                                  ReportingUtilities.spanOpeningWithCustomColor(getPositiveColor()), CLOSING_SPAN_TAG,
+                                  typeName, cost);
+                        } else {
+                            description = String.format(resources.getString("skillDesc.format"), typeName, cost);
+                        }
+
+                        SkillModifierData skillModifierData =
+                              person.getSkillModifierData(getCampaignOptions().isUseAgeEffects(),
+                                    getCampaign().isClanCampaign(), getCampaign().getLocalDate());
+
+                        menuItem = new JMenuItem(description);
+                        menuItem.setActionCommand(makeCommand(CMD_IMPROVE, typeName, String.valueOf(cost)));
+                        menuItem.addActionListener(this);
+                        menuItem.setEnabled(person.getXP() >= cost);
+                        if (skill != null) {
+                            if (skill.isImprovementLegal()) {
+                                SkillType skillType = getType(typeName);
+                                if (skillType == null) {
+                                    LOGGER.error("(Current Skills) Unknown skill type: {}", typeName);
+                                    continue;
+                                }
+
+                                String tooltip = wordWrap(skill.getTooltip(skillModifierData));
+                                menuItem.setToolTipText(tooltip);
+
+                                SkillSubType subType = skillType.getSubType();
+                                switch (subType) {
+                                    case NONE -> currentMenu.add(menuItem);
+                                    case COMBAT_GUNNERY -> combatGunnerySkillsCurrent.add(menuItem);
+                                    case COMBAT_PILOTING -> combatPilotingSkillsCurrent.add(menuItem);
+                                    case SUPPORT, SUPPORT_TECHNICIAN -> supportSkillsCurrent.add(menuItem);
+                                    case UTILITY, UTILITY_COMMAND -> utilitySkillsCurrent.add(menuItem);
+                                    case ROLEPLAY_GENERAL -> roleplaySkillsCurrent.add(menuItem);
+                                    case ROLEPLAY_ART -> roleplaySkillsArtCurrent.add(menuItem);
+                                    case ROLEPLAY_INTEREST -> roleplaySkillsInterestCurrent.add(menuItem);
+                                    case ROLEPLAY_SCIENCE, ROLEPLAY_SECURITY ->
+                                          roleplaySkillsScienceCurrent.add(menuItem);
+                                    default -> LOGGER.error("(Current Skills) Unknown skill sub type: {}", subType);
+                                }
+                            }
+                        } else {
                             SkillType skillType = getType(typeName);
                             if (skillType == null) {
-                                LOGGER.error("(Current Skills) Unknown skill type: {}", typeName);
+                                LOGGER.error("(New Skills) Unknown skill type: {}", typeName);
                                 continue;
                             }
 
-                            String tooltip = wordWrap(skill.getTooltip(skillModifierData));
+                            String tooltip = wordWrap(skillType.getFlavorText(false, true));
                             menuItem.setToolTipText(tooltip);
 
                             SkillSubType subType = skillType.getSubType();
                             switch (subType) {
-                                case NONE -> currentMenu.add(menuItem);
-                                case COMBAT_GUNNERY -> combatGunnerySkillsCurrent.add(menuItem);
-                                case COMBAT_PILOTING -> combatPilotingSkillsCurrent.add(menuItem);
-                                case SUPPORT, SUPPORT_TECHNICIAN -> supportSkillsCurrent.add(menuItem);
-                                case UTILITY, UTILITY_COMMAND -> utilitySkillsCurrent.add(menuItem);
-                                case ROLEPLAY_GENERAL -> roleplaySkillsCurrent.add(menuItem);
-                                case ROLEPLAY_ART -> roleplaySkillsArtCurrent.add(menuItem);
-                                case ROLEPLAY_INTEREST -> roleplaySkillsInterestCurrent.add(menuItem);
-                                case ROLEPLAY_SCIENCE, ROLEPLAY_SECURITY -> roleplaySkillsScienceCurrent.add(menuItem);
-                                default -> LOGGER.error("(Current Skills) Unknown skill sub type: {}", subType);
+                                case NONE -> newSkillsMenu.add(menuItem);
+                                case COMBAT_GUNNERY -> combatGunnerySkillsNew.add(menuItem);
+                                case COMBAT_PILOTING -> combatPilotingSkillsNew.add(menuItem);
+                                case SUPPORT, SUPPORT_TECHNICIAN -> supportSkillsNew.add(menuItem);
+                                case UTILITY, UTILITY_COMMAND -> utilitySkillsNew.add(menuItem);
+                                case ROLEPLAY_GENERAL -> roleplaySkillsNew.add(menuItem);
+                                case ROLEPLAY_ART -> roleplaySkillsArtNew.add(menuItem);
+                                case ROLEPLAY_INTEREST -> roleplaySkillsInterestNew.add(menuItem);
+                                case ROLEPLAY_SCIENCE, ROLEPLAY_SECURITY -> roleplaySkillsScienceNew.add(menuItem);
+                                default -> LOGGER.error("(New Skills) Unknown skill sub type: {}", subType);
                             }
-                        }
-                    } else {
-                        SkillType skillType = getType(typeName);
-                        if (skillType == null) {
-                            LOGGER.error("(New Skills) Unknown skill type: {}", typeName);
-                            continue;
-                        }
-
-                        String tooltip = wordWrap(skillType.getFlavorText(false, true));
-                        menuItem.setToolTipText(tooltip);
-
-                        SkillSubType subType = skillType.getSubType();
-                        switch (subType) {
-                            case NONE -> newSkillsMenu.add(menuItem);
-                            case COMBAT_GUNNERY -> combatGunnerySkillsNew.add(menuItem);
-                            case COMBAT_PILOTING -> combatPilotingSkillsNew.add(menuItem);
-                            case SUPPORT, SUPPORT_TECHNICIAN -> supportSkillsNew.add(menuItem);
-                            case UTILITY, UTILITY_COMMAND -> utilitySkillsNew.add(menuItem);
-                            case ROLEPLAY_GENERAL -> roleplaySkillsNew.add(menuItem);
-                            case ROLEPLAY_ART -> roleplaySkillsArtNew.add(menuItem);
-                            case ROLEPLAY_INTEREST -> roleplaySkillsInterestNew.add(menuItem);
-                            case ROLEPLAY_SCIENCE, ROLEPLAY_SECURITY -> roleplaySkillsScienceNew.add(menuItem);
-                            default -> LOGGER.error("(New Skills) Unknown skill sub type: {}", subType);
                         }
                     }
                 }
-            }
 
 
-            if (combatGunnerySkillsCurrent.getMenuComponentCount() > 0) {
-                currentMenu.add(combatGunnerySkillsCurrent);
-            }
-            if (combatPilotingSkillsCurrent.getMenuComponentCount() > 0) {
-                currentMenu.add(combatPilotingSkillsCurrent);
-            }
-            if (supportSkillsCurrent.getMenuComponentCount() > 0) {
-                currentMenu.add(supportSkillsCurrent);
-            }
-            if (utilitySkillsCurrent.getMenuComponentCount() > 0) {
-                currentMenu.add(utilitySkillsCurrent);
-            }
-            if (roleplaySkillsArtCurrent.getMenuComponentCount() > 0) {
-                roleplaySkillsCurrent.add(roleplaySkillsArtCurrent);
-            }
-            if (roleplaySkillsInterestCurrent.getMenuComponentCount() > 0) {
-                roleplaySkillsCurrent.add(roleplaySkillsInterestCurrent);
-            }
-            if (roleplaySkillsScienceCurrent.getMenuComponentCount() > 0) {
-                roleplaySkillsCurrent.add(roleplaySkillsScienceCurrent);
-            }
-            if (roleplaySkillsCurrent.getMenuComponentCount() > 0) {
-                currentMenu.add(roleplaySkillsCurrent);
-            }
-
-            if (currentMenu.getMenuComponentCount() > 0) {
-                menu.add(currentMenu);
-            }
-
-            if (combatGunnerySkillsNew.getMenuComponentCount() > 0) {
-                newSkillsMenu.add(combatGunnerySkillsNew);
-            }
-            if (combatPilotingSkillsNew.getMenuComponentCount() > 0) {
-                newSkillsMenu.add(combatPilotingSkillsNew);
-            }
-            if (supportSkillsNew.getMenuComponentCount() > 0) {
-                newSkillsMenu.add(supportSkillsNew);
-            }
-            if (utilitySkillsNew.getMenuComponentCount() > 0) {
-                newSkillsMenu.add(utilitySkillsNew);
-            }
-            if (roleplaySkillsArtNew.getMenuComponentCount() > 0) {
-                roleplaySkillsNew.add(roleplaySkillsArtNew);
-            }
-            if (roleplaySkillsInterestNew.getMenuComponentCount() > 0) {
-                roleplaySkillsNew.add(roleplaySkillsInterestNew);
-            }
-            if (roleplaySkillsScienceNew.getMenuComponentCount() > 0) {
-                roleplaySkillsNew.add(roleplaySkillsScienceNew);
-            }
-            if (roleplaySkillsNew.getMenuComponentCount() > 0) {
-                newSkillsMenu.add(roleplaySkillsNew);
-            }
-
-            if (newSkillsMenu.getMenuComponentCount() > 0) {
-                menu.add(newSkillsMenu);
-            }
-
-            JMenu traitsMenu = new JMenu(resources.getString("spendOnTraits.text"));
-            double costMultiplier = getCampaignOptions().getXpCostMultiplier();
-            int traitCost = (int) round(TRAIT_MODIFICATION_COST * costMultiplier);
-
-            // Connections
-            int connections = person.getConnections();
-            int target = connections + 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnConnections.text"), target, traitCost));
-            menuItem.setToolTipText(wordWrap(String.format(resources.getString("spendOnConnections.tooltip"),
-                  ((target > 0 ? "+" : "-") + target))));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  CONNECTIONS_LABEL,
-                  String.valueOf(traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target <= MAXIMUM_CONNECTIONS && person.getXP() >= traitCost);
-            traitsMenu.add(menuItem);
-
-            // Reputation
-            int reputation = person.getReputation();
-            target = reputation + 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnReputation.text"), target, traitCost));
-            menuItem.setToolTipText(wordWrap(String.format(resources.getString("spendOnReputation.tooltip"),
-                  (target == 0 ? 0 : (target > 0 ? "+" : "-") + target),
-                  target)));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  REPUTATION_LABEL,
-                  String.valueOf(traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target <= MAXIMUM_REPUTATION && person.getXP() >= traitCost);
-            traitsMenu.add(menuItem);
-
-            target = reputation - 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnReputation.text"), target, -traitCost));
-            menuItem.setToolTipText(wordWrap(String.format(resources.getString("spendOnReputation.tooltip"),
-                  (target == 0 ? 0 : (target > 0 ? "+" : "-") + target),
-                  target)));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  REPUTATION_LABEL,
-                  String.valueOf(-traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target >= MINIMUM_REPUTATION);
-            traitsMenu.add(menuItem);
-
-            // Wealth
-            int wealth = person.getWealth();
-            target = wealth + 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnWealth.text"), target, traitCost));
-            menuItem.setToolTipText(resources.getString("spendOnWealth.tooltip"));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  WEALTH_LABEL,
-                  String.valueOf(traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target <= MAXIMUM_WEALTH && person.getXP() >= traitCost);
-            traitsMenu.add(menuItem);
-
-            target = wealth - 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnWealth.text"), target, -traitCost));
-            menuItem.setToolTipText(resources.getString("spendOnWealth.tooltip"));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  WEALTH_LABEL,
-                  String.valueOf(-traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target >= MINIMUM_WEALTH);
-            traitsMenu.add(menuItem);
-
-            // Unlucky
-            int unlucky = person.getUnlucky();
-            target = unlucky + 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnUnlucky.text"), target, -traitCost));
-            menuItem.setToolTipText(String.format(resources.getString("spendOnUnlucky.tooltip"), target));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  UNLUCKY_LABEL,
-                  String.valueOf(-traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target <= MAXIMUM_UNLUCKY);
-            traitsMenu.add(menuItem);
-
-            target = unlucky - 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnUnlucky.text"), target, traitCost));
-            menuItem.setToolTipText(String.format(resources.getString("spendOnUnlucky.tooltip"), target));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  UNLUCKY_LABEL,
-                  String.valueOf(traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target >= MINIMUM_UNLUCKY && person.getXP() >= traitCost);
-            traitsMenu.add(menuItem);
-
-            // Bloodmark
-            int bloodmark = person.getBloodmark();
-
-            target = bloodmark + 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnBloodmark.text"), target, -traitCost));
-            menuItem.setToolTipText(String.format(resources.getString("spendOnBloodmark.tooltip"), target));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  BLOODMARK_LABEL,
-                  String.valueOf(-traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target <= MAXIMUM_BLOODMARK);
-            traitsMenu.add(menuItem);
-
-            target = bloodmark - 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnBloodmark.text"), target, traitCost));
-            menuItem.setToolTipText(String.format(resources.getString("spendOnBloodmark.tooltip"), target));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  BLOODMARK_LABEL,
-                  String.valueOf(traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target >= MINIMUM_BLOODMARK && person.getXP() >= traitCost);
-            traitsMenu.add(menuItem);
-
-            // Extra Income
-            int extraIncome = person.getExtraIncomeTraitLevel();
-
-            target = extraIncome + 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnExtraIncome.text"), target, traitCost));
-            menuItem.setToolTipText(String.format(resources.getString("spendOnExtraIncome.tooltip"), target));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  EXTRA_INCOME_LABEL,
-                  String.valueOf(traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target <= MAXIMUM_EXTRA_INCOME && person.getXP() >= traitCost);
-            traitsMenu.add(menuItem);
-
-            target = extraIncome - 1;
-            menuItem = new JMenuItem(String.format(resources.getString("spendOnExtraIncome.text"), target, -traitCost));
-            menuItem.setToolTipText(String.format(resources.getString("spendOnExtraIncome.tooltip"), target));
-            menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
-                  EXTRA_INCOME_LABEL,
-                  String.valueOf(-traitCost),
-                  String.valueOf(target)));
-            menuItem.addActionListener(this);
-            menuItem.setEnabled(target >= MINIMUM_EXTRA_INCOME);
-            traitsMenu.add(menuItem);
-
-            menu.add(traitsMenu);
-
-            JMenu attributesMenuIncrease = new JMenu(resources.getString("spendOnAttributes.increase"));
-            int attributeImprovementCost = (int) round(getCampaignOptions().getAttributeCost() * costMultiplier);
-            int edgeCost = (int) round(getCampaignOptions().getEdgeCost() * costMultiplier);
-            for (SkillAttribute attribute : SkillAttribute.values()) {
-                if (attribute.isNoAttribute()) {
-                    continue;
+                if (combatGunnerySkillsCurrent.getMenuComponentCount() > 0) {
+                    currentMenu.add(combatGunnerySkillsCurrent);
+                }
+                if (combatPilotingSkillsCurrent.getMenuComponentCount() > 0) {
+                    currentMenu.add(combatPilotingSkillsCurrent);
+                }
+                if (supportSkillsCurrent.getMenuComponentCount() > 0) {
+                    currentMenu.add(supportSkillsCurrent);
+                }
+                if (utilitySkillsCurrent.getMenuComponentCount() > 0) {
+                    currentMenu.add(utilitySkillsCurrent);
+                }
+                if (roleplaySkillsArtCurrent.getMenuComponentCount() > 0) {
+                    roleplaySkillsCurrent.add(roleplaySkillsArtCurrent);
+                }
+                if (roleplaySkillsInterestCurrent.getMenuComponentCount() > 0) {
+                    roleplaySkillsCurrent.add(roleplaySkillsInterestCurrent);
+                }
+                if (roleplaySkillsScienceCurrent.getMenuComponentCount() > 0) {
+                    roleplaySkillsCurrent.add(roleplaySkillsScienceCurrent);
+                }
+                if (roleplaySkillsCurrent.getMenuComponentCount() > 0) {
+                    currentMenu.add(roleplaySkillsCurrent);
                 }
 
-                boolean isEdge = attribute == SkillAttribute.EDGE;
-                if (isEdge && !getCampaignOptions().isUseEdge()) {
-                    continue;
+                if (currentMenu.getMenuComponentCount() > 0) {
+                    menu.add(currentMenu);
                 }
 
-                int attributeCost = (int) round((isEdge ? edgeCost : attributeImprovementCost)
-                                                      * reasoningXpCostMultiplier);
+                if (combatGunnerySkillsNew.getMenuComponentCount() > 0) {
+                    newSkillsMenu.add(combatGunnerySkillsNew);
+                }
+                if (combatPilotingSkillsNew.getMenuComponentCount() > 0) {
+                    newSkillsMenu.add(combatPilotingSkillsNew);
+                }
+                if (supportSkillsNew.getMenuComponentCount() > 0) {
+                    newSkillsMenu.add(supportSkillsNew);
+                }
+                if (utilitySkillsNew.getMenuComponentCount() > 0) {
+                    newSkillsMenu.add(utilitySkillsNew);
+                }
+                if (roleplaySkillsArtNew.getMenuComponentCount() > 0) {
+                    roleplaySkillsNew.add(roleplaySkillsArtNew);
+                }
+                if (roleplaySkillsInterestNew.getMenuComponentCount() > 0) {
+                    roleplaySkillsNew.add(roleplaySkillsInterestNew);
+                }
+                if (roleplaySkillsScienceNew.getMenuComponentCount() > 0) {
+                    roleplaySkillsNew.add(roleplaySkillsScienceNew);
+                }
+                if (roleplaySkillsNew.getMenuComponentCount() > 0) {
+                    newSkillsMenu.add(roleplaySkillsNew);
+                }
 
-                int current = person.getAttributeScore(attribute);
-                // Improve
-                target = current + 1;
-                menuItem = new JMenuItem(String.format(resources.getString("spendOnAttributes.format"),
-                      attribute.getLabel(),
-                      current,
+                if (newSkillsMenu.getMenuComponentCount() > 0) {
+                    menu.add(newSkillsMenu);
+                }
+
+                JMenu traitsMenu = new JMenu(resources.getString("spendOnTraits.text"));
+                double costMultiplier = getCampaignOptions().getXpCostMultiplier();
+                int traitCost = (int) round(TRAIT_MODIFICATION_COST * costMultiplier);
+
+                // Connections
+                int connections = person.getConnections();
+                int target = connections + 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnConnections.text"),
                       target,
-                      attributeCost));
-                menuItem.setToolTipText(wordWrap(String.format(resources.getString("spendOnAttributes.tooltip"))));
-                menuItem.setActionCommand(makeCommand(CMD_CHANGE_ATTRIBUTE,
-                      String.valueOf(attribute),
-                      String.valueOf(attributeCost)));
+                      traitCost));
+                menuItem.setToolTipText(wordWrap(String.format(resources.getString("spendOnConnections.tooltip"),
+                      ((target > 0 ? "+" : "-") + target))));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      CONNECTIONS_LABEL,
+                      String.valueOf(traitCost),
+                      String.valueOf(target)));
                 menuItem.addActionListener(this);
-                int attributeCap = person.getAttributeCap(attribute);
-                menuItem.setEnabled(target <= attributeCap && person.getXP() >= attributeCost);
-                attributesMenuIncrease.add(menuItem);
-            }
-            menu.add(attributesMenuIncrease);
-            JMenuHelpers.addMenuIfNonEmpty(popup, menu);
-            // endregion Spend XP Menu
+                menuItem.setEnabled(target <= MAXIMUM_CONNECTIONS && person.getXP() >= traitCost);
+                traitsMenu.add(menuItem);
 
-            // region Edge Triggers
-            if (getCampaignOptions().isUseEdge()) {
-                menu = new JMenu(resources.getString("setEdgeTriggers.text"));
+                // Reputation
+                int reputation = person.getReputation();
+                target = reputation + 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnReputation.text"),
+                      target,
+                      traitCost));
+                menuItem.setToolTipText(wordWrap(String.format(resources.getString("spendOnReputation.tooltip"),
+                      (target == 0 ? 0 : (target > 0 ? "+" : "-") + target),
+                      target)));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      REPUTATION_LABEL,
+                      String.valueOf(traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target <= MAXIMUM_REPUTATION && person.getXP() >= traitCost);
+                traitsMenu.add(menuItem);
 
-                // Start of Edge reroll options
-                // MekWarriors
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerHeadHits.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_HEAD_HIT));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_HEAD_HIT));
-                if (!person.getPrimaryRole().isMekWarriorGrouping()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
+                target = reputation - 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnReputation.text"),
+                      target,
+                      -traitCost));
+                menuItem.setToolTipText(wordWrap(String.format(resources.getString("spendOnReputation.tooltip"),
+                      (target == 0 ? 0 : (target > 0 ? "+" : "-") + target),
+                      target)));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      REPUTATION_LABEL,
+                      String.valueOf(-traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target >= MINIMUM_REPUTATION);
+                traitsMenu.add(menuItem);
+
+                // Wealth
+                int wealth = person.getWealth();
+                target = wealth + 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnWealth.text"), target, traitCost));
+                menuItem.setToolTipText(resources.getString("spendOnWealth.tooltip"));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      WEALTH_LABEL,
+                      String.valueOf(traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target <= MAXIMUM_WEALTH && person.getXP() >= traitCost);
+                traitsMenu.add(menuItem);
+
+                target = wealth - 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnWealth.text"), target, -traitCost));
+                menuItem.setToolTipText(resources.getString("spendOnWealth.tooltip"));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      WEALTH_LABEL,
+                      String.valueOf(-traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target >= MINIMUM_WEALTH);
+                traitsMenu.add(menuItem);
+
+                // Unlucky
+                int unlucky = person.getUnlucky();
+                target = unlucky + 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnUnlucky.text"), target, -traitCost));
+                menuItem.setToolTipText(String.format(resources.getString("spendOnUnlucky.tooltip"), target));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      UNLUCKY_LABEL,
+                      String.valueOf(-traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target <= MAXIMUM_UNLUCKY);
+                traitsMenu.add(menuItem);
+
+                target = unlucky - 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnUnlucky.text"), target, traitCost));
+                menuItem.setToolTipText(String.format(resources.getString("spendOnUnlucky.tooltip"), target));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      UNLUCKY_LABEL,
+                      String.valueOf(traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target >= MINIMUM_UNLUCKY && person.getXP() >= traitCost);
+                traitsMenu.add(menuItem);
+
+                // Bloodmark
+                int bloodmark = person.getBloodmark();
+
+                target = bloodmark + 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnBloodmark.text"),
+                      target,
+                      -traitCost));
+                menuItem.setToolTipText(String.format(resources.getString("spendOnBloodmark.tooltip"), target));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      BLOODMARK_LABEL,
+                      String.valueOf(-traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target <= MAXIMUM_BLOODMARK);
+                traitsMenu.add(menuItem);
+
+                target = bloodmark - 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnBloodmark.text"),
+                      target,
+                      traitCost));
+                menuItem.setToolTipText(String.format(resources.getString("spendOnBloodmark.tooltip"), target));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      BLOODMARK_LABEL,
+                      String.valueOf(traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target >= MINIMUM_BLOODMARK && person.getXP() >= traitCost);
+                traitsMenu.add(menuItem);
+
+                // Extra Income
+                int extraIncome = person.getExtraIncomeTraitLevel();
+
+                target = extraIncome + 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnExtraIncome.text"),
+                      target,
+                      traitCost));
+                menuItem.setToolTipText(String.format(resources.getString("spendOnExtraIncome.tooltip"), target));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      EXTRA_INCOME_LABEL,
+                      String.valueOf(traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target <= MAXIMUM_EXTRA_INCOME && person.getXP() >= traitCost);
+                traitsMenu.add(menuItem);
+
+                target = extraIncome - 1;
+                menuItem = new JMenuItem(String.format(resources.getString("spendOnExtraIncome.text"),
+                      target,
+                      -traitCost));
+                menuItem.setToolTipText(String.format(resources.getString("spendOnExtraIncome.tooltip"), target));
+                menuItem.setActionCommand(makeCommand(CMD_BUY_TRAIT,
+                      EXTRA_INCOME_LABEL,
+                      String.valueOf(-traitCost),
+                      String.valueOf(target)));
+                menuItem.addActionListener(this);
+                menuItem.setEnabled(target >= MINIMUM_EXTRA_INCOME);
+                traitsMenu.add(menuItem);
+
+                menu.add(traitsMenu);
+
+                JMenu attributesMenuIncrease = new JMenu(resources.getString("spendOnAttributes.increase"));
+                int attributeImprovementCost = (int) round(getCampaignOptions().getAttributeCost() * costMultiplier);
+                int edgeCost = (int) round(getCampaignOptions().getEdgeCost() * costMultiplier);
+                for (SkillAttribute attribute : SkillAttribute.values()) {
+                    if (attribute.isNoAttribute()) {
+                        continue;
+                    }
+
+                    boolean isEdge = attribute == SkillAttribute.EDGE;
+                    if (isEdge && !getCampaignOptions().isUseEdge()) {
+                        continue;
+                    }
+
+                    int attributeCost = (int) round((isEdge ? edgeCost : attributeImprovementCost)
+                                                          * reasoningXpCostMultiplier);
+
+                    int current = person.getAttributeScore(attribute);
+                    // Improve
+                    target = current + 1;
+                    menuItem = new JMenuItem(String.format(resources.getString("spendOnAttributes.format"),
+                          attribute.getLabel(),
+                          current,
+                          target,
+                          attributeCost));
+                    menuItem.setToolTipText(wordWrap(String.format(resources.getString("spendOnAttributes.tooltip"))));
+                    menuItem.setActionCommand(makeCommand(CMD_CHANGE_ATTRIBUTE,
+                          String.valueOf(attribute),
+                          String.valueOf(attributeCost)));
+                    menuItem.addActionListener(this);
+                    int attributeCap = person.getAttributeCap(attribute);
+                    menuItem.setEnabled(target <= attributeCap && person.getXP() >= attributeCost);
+                    attributesMenuIncrease.add(menuItem);
                 }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
+                menu.add(attributesMenuIncrease);
+                JMenuHelpers.addMenuIfNonEmpty(popup, menu);
+                // endregion Spend XP Menu
 
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerTAC.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_TAC));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_TAC));
-                if (!person.getPrimaryRole().isMekWarriorGrouping()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
+                // region Edge Triggers
+                if (getCampaignOptions().isUseEdge()) {
+                    menu = new JMenu(resources.getString("setEdgeTriggers.text"));
+
+                    // Start of Edge reroll options
+                    // MekWarriors
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerHeadHits.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_HEAD_HIT));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_HEAD_HIT));
+                    if (!person.getPrimaryRole().isMekWarriorGrouping()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerTAC.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_TAC));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_TAC));
+                    if (!person.getPrimaryRole().isMekWarriorGrouping()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerKO.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_KO));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_KO));
+                    if (!person.getPrimaryRole().isMekWarriorGrouping()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerExplosion.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_EXPLOSION));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_EXPLOSION));
+                    if (!person.getPrimaryRole().isMekWarriorGrouping()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerMASCFailure.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_MASC_FAILURE));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_MASC_FAILURE));
+                    if (!person.getPrimaryRole().isMekWarriorGrouping()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    // Aerospace pilots and gunners
+                    final boolean isNotAeroOrConventional = !(person.getPrimaryRole().isAerospacePilot() ||
+                                                                    person.getPrimaryRole()
+                                                                          .isConventionalAircraftPilot() ||
+                                                                    person.getPrimaryRole().isLAMPilot());
+                    final boolean isNotVessel = !person.getPrimaryRole().isVesselCrewMember();
+                    final boolean isNotAeroConvOrVessel = isNotAeroOrConventional || isNotVessel;
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroAltLoss.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_ALT_LOSS));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_ALT_LOSS));
+                    if (isNotAeroConvOrVessel) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroExplosion.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_EXPLOSION));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_EXPLOSION));
+                    if (isNotAeroConvOrVessel) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroKO.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_KO));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_KO));
+                    if (isNotAeroOrConventional) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroLuckyCrit.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_LUCKY_CRIT));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_LUCKY_CRIT));
+                    if (isNotAeroConvOrVessel) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroNukeCrit.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_NUKE_CRIT));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_NUKE_CRIT));
+                    if (isNotVessel) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroTrnBayCrit.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_UNIT_CARGO_LOST));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_UNIT_CARGO_LOST));
+                    if (isNotVessel) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerEscapeAttempt.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(EDGE_ESCAPE_ATTEMPTS));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_ESCAPE_ATTEMPTS));
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerReconFailure.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(EDGE_RECON_FAIL));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_RECON_FAIL));
+                    if (!person.isCombat()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerTraining.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(EDGE_TRAINING));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_TRAINING));
+                    if (!person.isCombat()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    // Commander
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString(
+                          "edgeTriggerCommanderNegotiationCheck.text"));
+                    cbMenuItem.setSelected(person.getOptions()
+                                                 .booleanOption(PersonnelOptions.EDGE_COMMANDER_NEGOTIATION));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                          PersonnelOptions.EDGE_COMMANDER_NEGOTIATION));
+                    if (!person.isCommander()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    // Doctors
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerHealCheck.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(PersonnelOptions.EDGE_MEDICAL));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_MEDICAL));
+                    if (!person.getPrimaryRole().isDoctor()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAdvancedSurgery.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(PersonnelOptions.EDGE_ADVANCED_SURGERY));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_ADVANCED_SURGERY));
+                    if (!person.getPrimaryRole().isDoctor()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    // Techs
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerBreakPart.text"));
+                    cbMenuItem.setSelected(person.getOptions().booleanOption(PersonnelOptions.EDGE_REPAIR_BREAK_PART));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_REPAIR_BREAK_PART));
+                    if (!person.getPrimaryRole().isTech()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerFailedRefit.text"));
+                    cbMenuItem.setSelected(person.getOptions()
+                                                 .booleanOption(PersonnelOptions.EDGE_REPAIR_FAILED_REFIT));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                          PersonnelOptions.EDGE_REPAIR_FAILED_REFIT));
+                    if (!person.getPrimaryRole().isTech()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerFatalAccident.text"));
+                    cbMenuItem.setSelected(person.getOptions()
+                                                 .booleanOption(PersonnelOptions.EDGE_SALVAGE_ACCIDENTS));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                          PersonnelOptions.EDGE_SALVAGE_ACCIDENTS));
+                    if (!person.getPrimaryRole().isTech()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    // Admins
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAcquireCheckOther.text"));
+                    cbMenuItem.setSelected(person.getOptions()
+                                                 .booleanOption(PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_OTHER));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                          PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_OTHER));
+                    if (!person.getPrimaryRole().isAdministrator()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAcquireCheckEight.text"));
+                    cbMenuItem.setSelected(person.getOptions()
+                                                 .booleanOption(PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_EIGHT));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                          PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_EIGHT));
+                    if (!person.getPrimaryRole().isAdministrator()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAcquireCheckEleven.text"));
+                    cbMenuItem.setSelected(person.getOptions()
+                                                 .booleanOption(PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_ELEVEN));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                          PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_ELEVEN));
+                    if (!person.getPrimaryRole().isAdministrator()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAppraisalCheck.text"));
+                    cbMenuItem.setSelected(person.getOptions()
+                                                 .booleanOption(PersonnelOptions.EDGE_ADMIN_APPRAISAL_FAIL));
+                    cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                          PersonnelOptions.EDGE_ADMIN_APPRAISAL_FAIL));
+                    if (!person.getPrimaryRole().isAdministrator()) {
+                        cbMenuItem.setForeground(new Color(150, 150, 150));
+                    }
+                    cbMenuItem.addActionListener(this);
+                    menu.add(cbMenuItem);
+
+                    JMenuHelpers.addMenuIfNonEmpty(popup, menu);
                 }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
+                // endregion Edge Triggers
 
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerKO.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_KO));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_KO));
-                if (!person.getPrimaryRole().isMekWarriorGrouping()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
+                popup.add(menu);
+            } else {
+                if (getCampaignOptions().isUseEdge()) {
+                    menu = new JMenu(resources.getString("setEdgeTriggers.text"));
+                    submenu = new JMenu(resources.getString("On.text"));
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerHeadHits.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_HEAD_HIT, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerTAC.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_TAC, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerKO.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_KO, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerExplosion.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_EXPLOSION, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerMASCFailure.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_MASC_FAILURE, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroAltLoss.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_ALT_LOSS, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroExplosion.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_EXPLOSION, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroKO.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_KO, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroLuckyCrit.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_LUCKY_CRIT, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroNukeCrit.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_NUKE_CRIT, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroTrnBayCrit.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_UNIT_CARGO_LOST, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerEscapeAttempt.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_ESCAPE_ATTEMPTS, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerCommanderNegotiationCheck.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                          PersonnelOptions.EDGE_COMMANDER_NEGOTIATION,
+                          TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerReconFailure.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_RECON_FAIL, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerTraining.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_TRAINING, TRUE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    if (getCampaignOptions().isUseEdge()) {
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerHealCheck.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_MEDICAL, TRUE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAdvancedSurgery.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADVANCED_SURGERY,
+                              TRUE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerBreakPart.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_REPAIR_BREAK_PART,
+                              TRUE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerFailedRefit.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_REPAIR_FAILED_REFIT,
+                              TRUE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerFatalAccident.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_SALVAGE_ACCIDENTS,
+                              TRUE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckOther.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_OTHER,
+                              TRUE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckEight.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_EIGHT,
+                              TRUE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckEleven.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_ELEVEN,
+                              TRUE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAppraisalCheck.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADMIN_APPRAISAL_FAIL,
+                              TRUE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+                    }
+                    JMenuHelpers.addMenuIfNonEmpty(menu, submenu);
+
+                    submenu = new JMenu(resources.getString("Off.text"));
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerHeadHits.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_HEAD_HIT, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerTAC.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_TAC, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerKO.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_KO, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerExplosion.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_EXPLOSION, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerMASCFailure.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_MASC_FAILURE, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroAltLoss.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_ALT_LOSS, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroExplosion.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_EXPLOSION, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroKO.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_KO, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroLuckyCrit.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_LUCKY_CRIT, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroNukeCrit.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_NUKE_CRIT, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerAeroTrnBayCrit.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_UNIT_CARGO_LOST, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerReconFailure.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_RECON_FAIL, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerTraining.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_TRAINING, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerEscapeAttempt.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_ESCAPE_ATTEMPTS, FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    menuItem = new JMenuItem(resources.getString("edgeTriggerCommanderNegotiationCheck.text"));
+                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                          PersonnelOptions.EDGE_COMMANDER_NEGOTIATION,
+                          FALSE));
+                    menuItem.addActionListener(this);
+                    submenu.add(menuItem);
+
+                    if (getCampaignOptions().isUseEdge()) {
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerHealCheck.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_MEDICAL, FALSE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAdvancedSurgery.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADVANCED_SURGERY,
+                              FALSE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerBreakPart.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_REPAIR_BREAK_PART,
+                              FALSE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerFailedRefit.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_REPAIR_FAILED_REFIT,
+                              FALSE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerFatalAccident.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_SALVAGE_ACCIDENTS,
+                              FALSE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckOther.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_OTHER,
+                              FALSE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckEight.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_EIGHT,
+                              FALSE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckEleven.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_ELEVEN,
+                              FALSE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+
+                        menuItem = new JMenuItem(resources.getString("edgeTriggerAppraisalCheck.text"));
+                        menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
+                              PersonnelOptions.EDGE_ADMIN_APPRAISAL_FAIL,
+                              FALSE));
+                        menuItem.addActionListener(this);
+                        submenu.add(menuItem);
+                    }
+                    JMenuHelpers.addMenuIfNonEmpty(menu, submenu);
+                    JMenuHelpers.addMenuIfNonEmpty(popup, menu);
                 }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerExplosion.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_EXPLOSION));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_EXPLOSION));
-                if (!person.getPrimaryRole().isMekWarriorGrouping()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerMASCFailure.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_MASC_FAILURE));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_MASC_FAILURE));
-                if (!person.getPrimaryRole().isMekWarriorGrouping()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                // Aerospace pilots and gunners
-                final boolean isNotAeroOrConventional = !(person.getPrimaryRole().isAerospacePilot() ||
-                                                                person.getPrimaryRole().isConventionalAircraftPilot() ||
-                                                                person.getPrimaryRole().isLAMPilot());
-                final boolean isNotVessel = !person.getPrimaryRole().isVesselCrewMember();
-                final boolean isNotAeroConvOrVessel = isNotAeroOrConventional || isNotVessel;
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroAltLoss.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_ALT_LOSS));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_ALT_LOSS));
-                if (isNotAeroConvOrVessel) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroExplosion.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_EXPLOSION));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_EXPLOSION));
-                if (isNotAeroConvOrVessel) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroKO.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_KO));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_KO));
-                if (isNotAeroOrConventional) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroLuckyCrit.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_LUCKY_CRIT));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_LUCKY_CRIT));
-                if (isNotAeroConvOrVessel) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroNukeCrit.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_NUKE_CRIT));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_NUKE_CRIT));
-                if (isNotVessel) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAeroTrnBayCrit.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(OPT_EDGE_WHEN_AERO_UNIT_CARGO_LOST));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_UNIT_CARGO_LOST));
-                if (isNotVessel) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerEscapeAttempt.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(EDGE_ESCAPE_ATTEMPTS));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_ESCAPE_ATTEMPTS));
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerReconFailure.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(EDGE_RECON_FAIL));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_RECON_FAIL));
-                if (!person.isCombat()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerTraining.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(EDGE_TRAINING));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_TRAINING));
-                if (!person.isCombat()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                // Commander
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString(
-                      "edgeTriggerCommanderNegotiationCheck.text"));
-                cbMenuItem.setSelected(person.getOptions()
-                                             .booleanOption(PersonnelOptions.EDGE_COMMANDER_NEGOTIATION));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                      PersonnelOptions.EDGE_COMMANDER_NEGOTIATION));
-                if (!person.isCommander()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                // Doctors
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerHealCheck.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(PersonnelOptions.EDGE_MEDICAL));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_MEDICAL));
-                if (!person.getPrimaryRole().isDoctor()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAdvancedSurgery.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(PersonnelOptions.EDGE_ADVANCED_SURGERY));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_ADVANCED_SURGERY));
-                if (!person.getPrimaryRole().isDoctor()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                // Techs
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerBreakPart.text"));
-                cbMenuItem.setSelected(person.getOptions().booleanOption(PersonnelOptions.EDGE_REPAIR_BREAK_PART));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_REPAIR_BREAK_PART));
-                if (!person.getPrimaryRole().isTech()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerFailedRefit.text"));
-                cbMenuItem.setSelected(person.getOptions()
-                                             .booleanOption(PersonnelOptions.EDGE_REPAIR_FAILED_REFIT));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                      PersonnelOptions.EDGE_REPAIR_FAILED_REFIT));
-                if (!person.getPrimaryRole().isTech()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerFatalAccident.text"));
-                cbMenuItem.setSelected(person.getOptions()
-                                             .booleanOption(PersonnelOptions.EDGE_SALVAGE_ACCIDENTS));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                      PersonnelOptions.EDGE_SALVAGE_ACCIDENTS));
-                if (!person.getPrimaryRole().isTech()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                // Admins
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAcquireCheckOther.text"));
-                cbMenuItem.setSelected(person.getOptions()
-                                             .booleanOption(PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_OTHER));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                      PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_OTHER));
-                if (!person.getPrimaryRole().isAdministrator()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAcquireCheckEight.text"));
-                cbMenuItem.setSelected(person.getOptions()
-                                             .booleanOption(PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_EIGHT));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                      PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_EIGHT));
-                if (!person.getPrimaryRole().isAdministrator()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAcquireCheckEleven.text"));
-                cbMenuItem.setSelected(person.getOptions()
-                                             .booleanOption(PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_ELEVEN));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                      PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_ELEVEN));
-                if (!person.getPrimaryRole().isAdministrator()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
-
-                cbMenuItem = new JCheckBoxMenuItem(resources.getString("edgeTriggerAppraisalCheck.text"));
-                cbMenuItem.setSelected(person.getOptions()
-                                             .booleanOption(PersonnelOptions.EDGE_ADMIN_APPRAISAL_FAIL));
-                cbMenuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                      PersonnelOptions.EDGE_ADMIN_APPRAISAL_FAIL));
-                if (!person.getPrimaryRole().isAdministrator()) {
-                    cbMenuItem.setForeground(new Color(150, 150, 150));
-                }
-                cbMenuItem.addActionListener(this);
-                menu.add(cbMenuItem);
 
                 JMenuHelpers.addMenuIfNonEmpty(popup, menu);
             }
-            // endregion Edge Triggers
-
-            popup.add(menu);
-        } else if (StaticChecks.areAllActiveFlexible(selected)) {
-            if (getCampaignOptions().isUseEdge()) {
-                menu = new JMenu(resources.getString("setEdgeTriggers.text"));
-                submenu = new JMenu(resources.getString("On.text"));
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerHeadHits.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_HEAD_HIT, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerTAC.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_TAC, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerKO.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_KO, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerExplosion.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_EXPLOSION, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerMASCFailure.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_MASC_FAILURE, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroAltLoss.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_ALT_LOSS, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroExplosion.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_EXPLOSION, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroKO.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_KO, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroLuckyCrit.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_LUCKY_CRIT, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroNukeCrit.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_NUKE_CRIT, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroTrnBayCrit.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_UNIT_CARGO_LOST, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerEscapeAttempt.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_ESCAPE_ATTEMPTS, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerCommanderNegotiationCheck.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                      PersonnelOptions.EDGE_COMMANDER_NEGOTIATION,
-                      TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerReconFailure.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_RECON_FAIL, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerTraining.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_TRAINING, TRUE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                if (getCampaignOptions().isUseEdge()) {
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerHealCheck.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_MEDICAL, TRUE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAdvancedSurgery.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADVANCED_SURGERY,
-                          TRUE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerBreakPart.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_REPAIR_BREAK_PART,
-                          TRUE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerFailedRefit.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_REPAIR_FAILED_REFIT,
-                          TRUE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerFatalAccident.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_SALVAGE_ACCIDENTS,
-                          TRUE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckOther.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_OTHER,
-                          TRUE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckEight.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_EIGHT,
-                          TRUE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckEleven.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_ELEVEN,
-                          TRUE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAppraisalCheck.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADMIN_APPRAISAL_FAIL,
-                          TRUE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-                }
-                JMenuHelpers.addMenuIfNonEmpty(menu, submenu);
-
-                submenu = new JMenu(resources.getString("Off.text"));
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerHeadHits.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_HEAD_HIT, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerTAC.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_TAC, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerKO.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_KO, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerExplosion.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_EXPLOSION, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerMASCFailure.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_MASC_FAILURE, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroAltLoss.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_ALT_LOSS, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroExplosion.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_EXPLOSION, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroKO.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_KO, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroLuckyCrit.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_LUCKY_CRIT, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroNukeCrit.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_NUKE_CRIT, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerAeroTrnBayCrit.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, OPT_EDGE_WHEN_AERO_UNIT_CARGO_LOST, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerReconFailure.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_RECON_FAIL, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerTraining.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_TRAINING, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerEscapeAttempt.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, EDGE_ESCAPE_ATTEMPTS, FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                menuItem = new JMenuItem(resources.getString("edgeTriggerCommanderNegotiationCheck.text"));
-                menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                      PersonnelOptions.EDGE_COMMANDER_NEGOTIATION,
-                      FALSE));
-                menuItem.addActionListener(this);
-                submenu.add(menuItem);
-
-                if (getCampaignOptions().isUseEdge()) {
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerHealCheck.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER, PersonnelOptions.EDGE_MEDICAL, FALSE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAdvancedSurgery.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADVANCED_SURGERY,
-                          FALSE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerBreakPart.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_REPAIR_BREAK_PART,
-                          FALSE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerFailedRefit.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_REPAIR_FAILED_REFIT,
-                          FALSE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerFatalAccident.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_SALVAGE_ACCIDENTS,
-                          FALSE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckOther.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_OTHER,
-                          FALSE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckEight.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_EIGHT,
-                          FALSE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAcquireCheckEleven.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADMIN_ACQUIRE_FAIL_ELEVEN,
-                          FALSE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-
-                    menuItem = new JMenuItem(resources.getString("edgeTriggerAppraisalCheck.text"));
-                    menuItem.setActionCommand(makeCommand(CMD_EDGE_TRIGGER,
-                          PersonnelOptions.EDGE_ADMIN_APPRAISAL_FAIL,
-                          FALSE));
-                    menuItem.addActionListener(this);
-                    submenu.add(menuItem);
-                }
-                JMenuHelpers.addMenuIfNonEmpty(menu, submenu);
-                JMenuHelpers.addMenuIfNonEmpty(popup, menu);
-            }
-
-            JMenuHelpers.addMenuIfNonEmpty(popup, menu);
         }
+
 
         if (!oneSelected) {
             menuItem = new JMenuItem(resources.getString("bulkAssignSinglePortrait.text"));
@@ -4633,6 +4704,30 @@ public class PersonnelTableMouseAdapter extends JPopupMenuAdapter {
         // endregion GM Menu
 
         return Optional.of(popup);
+    }
+
+    private void addBuyRandomAbilityMenuOption(boolean isUseReasoningMultiplier, JMenu submenu, boolean oneSelected,
+          Person[] person, double xpCostMultiplier) {
+        int baseCost = getCampaignOptions().getRandomSPAPurchaseCost();
+        boolean allowFlaws = getCampaignOptions().isAllowRandomSPAPurchaseFlaws();
+
+        int cost = baseCost;
+        if (oneSelected) {
+            final double reasoningXpCostMultiplier = person[0].getReasoningXpCostMultiplier(isUseReasoningMultiplier);
+            cost = (int) round(baseCost * reasoningXpCostMultiplier);
+            cost = (int) round(cost * xpCostMultiplier);
+        }
+
+        JMenuItem buyRandomAbility = new JMenuItem(getFormattedText("buyRandomSPA.text", cost));
+        buyRandomAbility.setToolTipText(getFormattedText("buyRandomSPA.tooltip"));
+        buyRandomAbility.setActionCommand(makeCommand(CMD_BUY_RANDOM_ABILITY,
+              String.valueOf(isUseReasoningMultiplier),
+              String.valueOf(xpCostMultiplier),
+              String.valueOf(allowFlaws),
+              String.valueOf(baseCost)));
+        buyRandomAbility.addActionListener(this);
+
+        submenu.add(buyRandomAbility);
     }
 
     private void addEdgeRefreshOption(boolean oneSelected, Person person, boolean isUseReasoningMultiplier,

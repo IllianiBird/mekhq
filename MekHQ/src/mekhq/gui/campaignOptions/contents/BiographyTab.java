@@ -126,6 +126,9 @@ public class BiographyTab {
     private JCheckBox chkAwardRelevantVeterancySPAs;
     private JCheckBox chkComingOfAgeSPAs;
     private JCheckBox chkRewardComingOfAgeRPSkills;
+    private JLabel lblRandomSPAPurchaseCost;
+    private JSpinner spnRandomSPAPurchaseCost;
+    private JCheckBox chkAllowRandomSPAPurchaseFlaws;
     //end General Tab
 
     //start Backgrounds Tab
@@ -414,6 +417,9 @@ public class BiographyTab {
         chkAwardRelevantVeterancySPAs = new JCheckBox();
         chkComingOfAgeSPAs = new JCheckBox();
         chkRewardComingOfAgeRPSkills = new JCheckBox();
+        lblRandomSPAPurchaseCost = new JLabel();
+        spnRandomSPAPurchaseCost = new JSpinner();
+        chkAllowRandomSPAPurchaseFlaws = new JCheckBox();
     }
 
     /**
@@ -633,6 +639,19 @@ public class BiographyTab {
         chkRewardComingOfAgeRPSkills.addMouseListener(createTipPanelUpdater(generalHeader,
               "ComingOfAgeRPSkills"));
 
+        lblRandomSPAPurchaseCost = new CampaignOptionsLabel("RandomSPAPurchaseCost",
+              getMetadata(new Version(0, 51, 1), CampaignOptionFlag.IMPORTANT));
+        lblRandomSPAPurchaseCost.addMouseListener(createTipPanelUpdater(generalHeader,
+              "RandomSPAPurchaseCost"));
+
+        spnRandomSPAPurchaseCost = new CampaignOptionsSpinner("RandomSPAPurchaseCost", 0, 0, 1000, 1);
+        spnRandomSPAPurchaseCost.addMouseListener(createTipPanelUpdater(generalHeader,
+              "RandomSPAPurchaseCost"));
+
+        chkAllowRandomSPAPurchaseFlaws = new CampaignOptionsCheckBox("AllowRandomSPAPurchaseFlaws");
+        chkAllowRandomSPAPurchaseFlaws.addMouseListener(createTipPanelUpdater(generalHeader,
+              "AllowRandomSPAPurchaseFlaws"));
+
         // Layout the Panel
         final JPanel panel = new CampaignOptionsStandardPanel("ComingOfAgePanel", true, "ComingOfAgePanel");
         final GridBagConstraints layoutParent = new CampaignOptionsGridBagConstraints(panel);
@@ -650,6 +669,15 @@ public class BiographyTab {
 
         layoutParent.gridy++;
         panel.add(chkRewardComingOfAgeRPSkills, layoutParent);
+
+        layoutParent.gridy++;
+        panel.add(lblRandomSPAPurchaseCost, layoutParent);
+        layoutParent.gridx++;
+        panel.add(spnRandomSPAPurchaseCost, layoutParent);
+
+        layoutParent.gridx = 0;
+        layoutParent.gridy++;
+        panel.add(chkAllowRandomSPAPurchaseFlaws, layoutParent);
 
         return panel;
     }
@@ -1620,6 +1648,8 @@ public class BiographyTab {
         chkAwardRelevantVeterancySPAs.setSelected(options.isAwardRelevantVeterancySPAs());
         chkComingOfAgeSPAs.setSelected(options.isRewardComingOfAgeAbilities());
         chkRewardComingOfAgeRPSkills.setSelected(options.isRewardComingOfAgeRPSkills());
+        spnRandomSPAPurchaseCost.setValue(options.getRandomSPAPurchaseCost());
+        chkAllowRandomSPAPurchaseFlaws.setSelected(options.isAllowRandomSPAPurchaseFlaws());
 
         // Backgrounds
         chkUseRandomPersonalities.setSelected(options.isUseRandomPersonalities());
@@ -1721,6 +1751,8 @@ public class BiographyTab {
         options.setAwardRelevantVeterancySPAs(chkAwardRelevantVeterancySPAs.isSelected());
         options.setRewardComingOfAgeAbilities(chkComingOfAgeSPAs.isSelected());
         options.setRewardComingOfAgeRPSkills(chkRewardComingOfAgeRPSkills.isSelected());
+        options.setRandomSPAPurchaseCost((int) spnRandomSPAPurchaseCost.getValue());
+        options.setAllowRandomSPAPurchaseFlaws(chkAllowRandomSPAPurchaseFlaws.isSelected());
 
         // Backgrounds
         options.setUseRandomPersonalities(chkUseRandomPersonalities.isSelected());

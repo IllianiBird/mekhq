@@ -255,6 +255,8 @@ public class CampaignOptions {
     private boolean displayPerformanceRecord;
     private boolean awardVeterancySPAs;
     private boolean awardRelevantVeterancySPAs;
+    private int randomSPAPurchaseCost;
+    private boolean allowRandomSPAPurchaseFlaws;
 
     // Expanded Personnel Information
     private boolean useTimeInService;
@@ -874,6 +876,8 @@ public class CampaignOptions {
         displayPatientRecord = false;
         setRewardComingOfAgeAbilities(false);
         setRewardComingOfAgeRPSkills(false);
+        setRandomSPAPurchaseCost(0);
+        setAllowRandomSPAPurchaseFlaws(true);
 
         // Expanded Personnel Information
         setUseTimeInService(false);
@@ -1886,6 +1890,22 @@ public class CampaignOptions {
 
     public void setRewardComingOfAgeRPSkills(final boolean rewardComingOfAgeRPSkills) {
         this.rewardComingOfAgeRPSkills = rewardComingOfAgeRPSkills;
+    }
+
+    public int getRandomSPAPurchaseCost() {
+        return randomSPAPurchaseCost;
+    }
+
+    public void setRandomSPAPurchaseCost(final int randomSPAPurchaseCost) {
+        this.randomSPAPurchaseCost = randomSPAPurchaseCost;
+    }
+
+    public boolean isAllowRandomSPAPurchaseFlaws() {
+        return allowRandomSPAPurchaseFlaws;
+    }
+
+    public void setAllowRandomSPAPurchaseFlaws(final boolean allowRandomSPAPurchaseFlaws) {
+        this.allowRandomSPAPurchaseFlaws = allowRandomSPAPurchaseFlaws;
     }
 
     public boolean isUseFatigue() {

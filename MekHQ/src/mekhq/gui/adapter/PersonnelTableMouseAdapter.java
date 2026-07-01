@@ -347,6 +347,10 @@ public class PersonnelTableMouseAdapter extends JPopupMenuAdapter {
         return getCampaign().getCampaignOptions();
     }
 
+    private String makeCommand(String... parts) {
+        return Utilities.combineString(Arrays.asList(parts), SEPARATOR);
+    }
+
     public static void connect(CampaignGUI gui, JTable personnelTable, PersonnelTableModel personnelModel,
           JSplitPane splitPersonnel) {
         new PersonnelTableMouseAdapter(gui, personnelTable, personnelModel) {
@@ -356,7 +360,7 @@ public class PersonnelTableMouseAdapter extends JPopupMenuAdapter {
                     int width = splitPersonnel.getSize().width;
                     int location = splitPersonnel.getDividerLocation();
                     int size = splitPersonnel.getDividerSize();
-                    if ((width - location + size) < PersonnelTab.PERSONNEL_VIEW_WIDTH) {
+                    if ((width - location + size) < PersonnelTab.PERSON_VIEW_MIN_WIDTH) {
                         // expand
                         splitPersonnel.resetToPreferredSizes();
                     } else {
@@ -366,10 +370,6 @@ public class PersonnelTableMouseAdapter extends JPopupMenuAdapter {
                 }
             }
         }.connect(personnelTable);
-    }
-
-    private String makeCommand(String... parts) {
-        return Utilities.combineString(Arrays.asList(parts), SEPARATOR);
     }
 
     @Override

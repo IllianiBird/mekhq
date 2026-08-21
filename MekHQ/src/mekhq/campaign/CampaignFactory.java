@@ -240,6 +240,7 @@ public class CampaignFactory {
                   finances,
                   randomEvents,
                   ultimatums,
+                    lifePaths,
                   retirementDefectionTracker,
                   autosave,
                   behaviorSettings,

@@ -47,8 +47,6 @@ import mekhq.campaign.finances.Finances;
 import mekhq.campaign.force.Formation;
 import mekhq.campaign.market.PartsStore;
 import mekhq.campaign.market.PersonnelMarket;
-import mekhq.campaign.market.contractMarket.AbstractContractMarket;
-import mekhq.campaign.market.contractMarket.AtbMonthlyContractMarket;
 import mekhq.campaign.market.personnelMarket.markets.NewPersonnelMarket;
 import mekhq.campaign.market.unitMarket.AbstractUnitMarket;
 import mekhq.campaign.personnel.advancedCharacterBuilder.LifePath;
@@ -98,7 +96,6 @@ public class CampaignConfiguration {
     @Deprecated(since = "0.50.06")
     private PersonnelMarket personnelMarket;
 
-    private AbstractContractMarket contractMarket;
     private AbstractUnitMarket unitMarket;
 
     private AbstractDivorce divorce;
@@ -131,29 +128,27 @@ public class CampaignConfiguration {
      * Partial CampaignConfiguration constructor; takes _some_ information needed to instantiate a Campaign. Meant for
      * use by CampaignFactory and test methods.
      *
-     * @param name                     Campaign name String
-     * @param date                     LocalDate start date
-     * @param campaignOpts             CampaignOptions instance
-     * @param faction                  Faction instance
-     * @param techFaction              Faction enum value describing tech base
-     * @param currencyManager          Default
-     * @param reputationController     Default
-     * @param factionStandings         Default
-     * @param rankSystem               Default Rank System
-     * @param formation                List of player's TOE formations
-     * @param finances                 Default
-     * @param randomEvents             Default RandomEventsLibraries
-     * @param ultimatums               Default
-     * @param lifePaths                Default
-     * @param retDefTracker            RetirementDefectionTracker instance
-     * @param autosave                 Autosave service instance
-     * @param behaviorSettings         Default behavior settings
-     * @param persMarket               Personnel Market (deprecated; replace with new market after refactoring)
-     * @param atbMonthlyContractMarket Contract Market
-     * @param unitMarket               Unit Market
-     * @param divorce                  AbstractDivorce instance, defaults to Disabled
-     * @param marriage                 AbstractMarriage instance, defaults to Disabled
-     * @param procreation              AbstractProcreation instance, defaults to Disabled
+     * @param name                 Campaign name String
+     * @param date                 LocalDate start date
+     * @param campaignOpts         CampaignOptions instance
+     * @param faction              Faction instance
+     * @param techFaction          Faction enum value describing tech base
+     * @param currencyManager      Default
+     * @param reputationController Default
+     * @param factionStandings     Default
+     * @param rankSystem           Default Rank System
+     * @param formation            List of player's TOE formations
+     * @param finances             Default
+     * @param randomEvents         Default RandomEventsLibraries
+     * @param ultimatums           Default
+     * @param retDefTracker        RetirementDefectionTracker instance
+     * @param autosave             Autosave service instance
+     * @param behaviorSettings     Default behavior settings
+     * @param persMarket           Personnel Market (deprecated; replace with new market after refactoring)
+     * @param unitMarket           Unit Market
+     * @param divorce              AbstractDivorce instance, defaults to Disabled
+     * @param marriage             AbstractMarriage instance, defaults to Disabled
+     * @param procreation          AbstractProcreation instance, defaults to Disabled
      */
     public CampaignConfiguration(
           String name,
@@ -174,7 +169,6 @@ public class CampaignConfiguration {
           AutosaveService autosave,
           BehaviorSettings behaviorSettings,
           PersonnelMarket persMarket,
-          AtbMonthlyContractMarket atbMonthlyContractMarket,
           AbstractUnitMarket unitMarket,
           AbstractDivorce divorce,
           AbstractMarriage marriage,
@@ -198,7 +192,6 @@ public class CampaignConfiguration {
         this.autosaveService = autosave;
         this.autoResolveBehaviorSettings = behaviorSettings;
         this.personnelMarket = persMarket;
-        this.contractMarket = atbMonthlyContractMarket;
         this.unitMarket = unitMarket;
         this.divorce = divorce;
         this.marriage = marriage;
@@ -209,40 +202,37 @@ public class CampaignConfiguration {
      * Primary CampaignConfiguration constructor; takes all information needed to instantiate a Campaign. Meant for use
      * by CampaignFactory methods.
      *
-     * @param game                     Game instance
-     * @param player                   Player instance
-     * @param name                     Campaign name String
-     * @param date                     LocalDate start date
-     * @param campaignOpts             CampaignOptions instance
-     * @param gameOptions              GameOptions instance, for MegaMek
-     * @param partsStore               PartsStore instance (Campaign or user must initialize with campaign reference!)
-     * @param newPersonnelMarket       NewPersonnelMarket instance (Campaign or user must initialize with campaign
-     *                                 reference!)
-     * @param randomDeath              RandomDeath instance (Campaign or user must initialize with campaign reference!)
-     * @param campaignSummary          CampaignSummary instance (Campaign or user must initialize with campaign
-     *                                 reference!)
-     * @param faction                  Faction instance
-     * @param techFaction              Faction enum value describing tech base
-     * @param currencyManager          Default
-     * @param systemsInstance          Instance of Systems, for hooking into Systems lookups.
-     * @param startLocation            Location of starting planetary system.
-     * @param reputationController     Default
-     * @param factionStandings         Default
-     * @param rankSystem               Default Rank System
-     * @param formation                List of player's TOE formations
-     * @param finances                 Default
-     * @param randomEvents             Default RandomEventsLibraries
-     * @param ultimatums               Default
-     * @param lifePaths                Default
-     * @param retDefTracker            RetirementDefectionTracker instance
-     * @param autosave                 Autosave service instance
-     * @param behaviorSettings         Default behavior settings
-     * @param persMarket               Personnel Market (deprecated; replace with new market after refactoring)
-     * @param atbMonthlyContractMarket Contract Market
-     * @param unitMarket               Unit Market
-     * @param divorce                  AbstractDivorce instance, defaults to Disabled
-     * @param marriage                 AbstractMarriage instance, defaults to Disabled
-     * @param procreation              AbstractProcreation instance, defaults to Disabled
+     * @param game                 Game instance
+     * @param player               Player instance
+     * @param name                 Campaign name String
+     * @param date                 LocalDate start date
+     * @param campaignOpts         CampaignOptions instance
+     * @param gameOptions          GameOptions instance, for MegaMek
+     * @param partsStore           PartsStore instance (Campaign or user must initialize with campaign reference!)
+     * @param newPersonnelMarket   NewPersonnelMarket instance (Campaign or user must initialize with campaign
+     *                             reference!)
+     * @param randomDeath          RandomDeath instance (Campaign or user must initialize with campaign reference!)
+     * @param campaignSummary      CampaignSummary instance (Campaign or user must initialize with campaign reference!)
+     * @param faction              Faction instance
+     * @param techFaction          Faction enum value describing tech base
+     * @param currencyManager      Default
+     * @param systemsInstance      Instance of Systems, for hooking into Systems lookups.
+     * @param startLocation        Location of starting planetary system.
+     * @param reputationController Default
+     * @param factionStandings     Default
+     * @param rankSystem           Default Rank System
+     * @param formation            List of player's TOE formations
+     * @param finances             Default
+     * @param randomEvents         Default RandomEventsLibraries
+     * @param ultimatums           Default
+     * @param retDefTracker        RetirementDefectionTracker instance
+     * @param autosave             Autosave service instance
+     * @param behaviorSettings     Default behavior settings
+     * @param persMarket           Personnel Market (deprecated; replace with new market after refactoring)
+     * @param unitMarket           Unit Market
+     * @param divorce              AbstractDivorce instance, defaults to Disabled
+     * @param marriage             AbstractMarriage instance, defaults to Disabled
+     * @param procreation          AbstractProcreation instance, defaults to Disabled
      */
     @Deprecated(since = "0.51.0", forRemoval = true)
     public CampaignConfiguration(
@@ -273,7 +263,6 @@ public class CampaignConfiguration {
           AutosaveService autosave,
           BehaviorSettings behaviorSettings,
           PersonnelMarket persMarket,
-          AtbMonthlyContractMarket atbMonthlyContractMarket,
           AbstractUnitMarket unitMarket,
           AbstractDivorce divorce,
           AbstractMarriage marriage,
@@ -306,7 +295,6 @@ public class CampaignConfiguration {
         this.autosaveService = autosave;
         this.autoResolveBehaviorSettings = behaviorSettings;
         this.personnelMarket = persMarket;
-        this.contractMarket = atbMonthlyContractMarket;
         this.unitMarket = unitMarket;
         this.divorce = divorce;
         this.marriage = marriage;
@@ -421,10 +409,6 @@ public class CampaignConfiguration {
         return this.personnelMarket;
     }
 
-    public AbstractContractMarket getAtBMonthlyContractMarket() {
-        return this.contractMarket;
-    }
-
     public AbstractUnitMarket getUnitMarket() {
         return this.unitMarket;
     }
@@ -496,10 +480,6 @@ public class CampaignConfiguration {
 
     public void setCampaignOptions(CampaignOptions campaignOptions) {
         this.campaignOptions = campaignOptions;
-    }
-
-    public void setContractMarket(AbstractContractMarket contractMarket) {
-        this.contractMarket = contractMarket;
     }
 
     public void setUnitMarket(AbstractUnitMarket unitMarket) {

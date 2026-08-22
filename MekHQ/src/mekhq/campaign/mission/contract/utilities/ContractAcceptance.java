@@ -91,6 +91,7 @@ public final class ContractAcceptance {
         // Take the offer off the market and register it as a mission. addMission must come before StratCon setup so the
         // contract has its mission id when the tracks are seeded.
         campaign.getPlayerForce().getContractMarket().removeContract(bucket, contract);
+
         // A market offer carries no status; accepting it is what makes it a running mission. Set this before
         // addMission, since every contractHistory filter keys off the status.
         contract.setStatus(MissionStatus.ACTIVE);
@@ -120,6 +121,8 @@ public final class ContractAcceptance {
 
         // Start the contract: dates it to the projected arrival day and (per the checkboxes) mothballs and/or jumps.
         ContractAutomation.performContractStart(campaign, contract, mothball, travel);
+
+        campaign.getPlayerForce().addContract(contract);
 
         // Announce the fully-initialized contract so listeners (e.g. the StratCon tab) pick it up.
         MekHQ.triggerEvent(new MissionChangedEvent(contract));

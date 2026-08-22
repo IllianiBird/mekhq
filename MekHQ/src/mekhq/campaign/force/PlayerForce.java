@@ -186,7 +186,8 @@ public class PlayerForce extends AbstractForce implements SingleDetachmentForce 
                 if (contract.getStatus() == null) {
                     contract.setStatus(MissionStatus.ACTIVE);
                 }
-                contractHistory.put(contract.getId(), contract);
+
+                campaign.importMission(contract);
             }
         }
     }

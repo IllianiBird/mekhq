@@ -54,7 +54,6 @@ public enum ATOWTraits {
     ENEMY("ENEMY", -10, 0),
     EXTRA_INCOME("EXTRA_INCOME", ExtraIncome.NEGATIVE_TEN.getTraitLevel(), ExtraIncome.POSITIVE_TEN.getTraitLevel()),
     ORIGIN_DEPENDENTS("ORIGIN_DEPENDENTS", -10, 0), // character creation only
-    ORIGIN_EQUIPPED("ORIGIN_EQUIPPED", -1, 8),
     ORIGIN_MISSING_LIMB("ORIGIN_MISSING_LIMB", -5, 0), // character creation only
     ORIGIN_OWNED_VEHICLE("ORIGIN_OWNED_VEHICLE", 0, 12), // character creation only
     ORIGIN_PROSTHETIC("ORIGIN_PROSTHETIC", -6, 0), // character creation only

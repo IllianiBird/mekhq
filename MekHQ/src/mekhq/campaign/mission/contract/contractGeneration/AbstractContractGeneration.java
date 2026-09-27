@@ -463,7 +463,7 @@ public abstract class AbstractContractGeneration {
         if (targetSystem == null) {
             return null;
         }
-        return ChaosPlanetSelector.selectTargetPlanet(targetSystem.getPlanets(),
+        return ChaosPlanetSelector.selectTargetPlanet(targetSystem.getPlanets(), targetSystem.getPrimaryPlanet(),
               contract.getObjectiveType().getChaosObjectiveType(), currentDate);
     }
 
@@ -530,7 +530,8 @@ public abstract class AbstractContractGeneration {
 
         boolean isUseCommandCircuit = FactionStandingUtilities.isUseCommandCircuit(overridingCommandCircuitRequirements,
               isGM, factionStandings, employerFactionCode);
-        int journeyTimeInDays = (int) ceil(jumpPath.getTotalTime(currentDate, 0, isUseCommandCircuit));
+        int journeyTimeInDays = (int) ceil(jumpPath.getTotalTime(currentDate, 0, isUseCommandCircuit,
+              campaign.getJumpDriveProfile()));
         return currentDate.plusDays(journeyTimeInDays);
     }
 
@@ -734,7 +735,7 @@ public abstract class AbstractContractGeneration {
         String targetSystemId = shouldAlwaysPickCurrentSystem ?
                                       currentSystemId :
                                       ChaosContractDeterminationLocation.determineContractLocation(objectiveData.playerObjectiveType(),
-                                            true,
+                                            !isDefensiveObjective,
                                             employerData.anchorFactionCode(),
                                             enemyData.factionCode(),
                                             currentLocation);

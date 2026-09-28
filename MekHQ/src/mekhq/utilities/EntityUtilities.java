@@ -38,8 +38,10 @@ import megamek.common.annotations.Nullable;
 import megamek.common.equipment.MiscType;
 import megamek.common.equipment.Mounted;
 import megamek.common.equipment.Sensor;
+import megamek.common.equipment.enums.BombType.BombTypeEnum;
 import megamek.common.options.OptionsConstants;
 import megamek.common.units.Entity;
+import megamek.common.units.IBomber;
 import megamek.common.units.UnitType;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.LocalHangar;
@@ -124,6 +126,25 @@ public class EntityUtilities {
      *
      * @return {@code true} if the entity has a standard active probe (but not Improved Sensors)
      */
+    /**
+     * Determines whether the given {@link Entity} carries a Recon Camera, either built in or as a Recon Camera Pod in
+     * its bomb loadout.
+     *
+     * @param entity the {@link Entity} to check for a recon camera
+     *
+     * @return {@code true} if the entity has a recon camera or camera pod
+     */
+    public static boolean hasReconCamera(Entity entity) {
+        for (Mounted<?> equip : entity.getMisc()) {
+            if (equip.getType().hasFlag(MiscType.F_RECON_CAMERA)) {
+                return true;
+            }
+        }
+
+        // Camera pods are only mounted when the unit enters a game, so check the bomb loadout instead
+        return (entity instanceof IBomber bomber) && (bomber.getBombChoices().getCount(BombTypeEnum.RECON_CAMERA) > 0);
+    }
+
     public static boolean hasActiveProbe(Entity entity) {
         for (Mounted<?> equip : entity.getMisc()) {
             if (equip.getType().hasFlag(MiscType.F_BAP)

@@ -1138,9 +1138,10 @@ class StratConRulesManagerTest {
         }
 
         @ParameterizedTest
-        @CsvSource({ "true, -1", "false, 0" })
-        void testGetUnitEquipmentModifier(boolean hasSensorEquipment, int expectedModifier) {
-            TargetRollModifier modifier = StratConRulesManager.getUnitEquipmentModifier(hasSensorEquipment);
+        @CsvSource({ "false, false, 0", "true, false, -2", "false, true, -1", "true, true, -2" })
+        void testGetUnitEquipmentModifier(boolean hasSensorEquipment, boolean hasReconCamera, int expectedModifier) {
+            TargetRollModifier modifier =
+                  StratConRulesManager.getUnitEquipmentModifier(hasSensorEquipment, hasReconCamera);
             assertEquals(expectedModifier, modifier.value());
             assertEquals("Unit Sensor Equipment Modifier", modifier.description());
         }
@@ -1158,13 +1159,14 @@ class StratConRulesManagerTest {
         @Test
         void testGetAllScoutRollModifiers() {
             // 60t (weight mod: 2), speed 8 (speed mod: -1)
-            // has sensor quipment (equip mod: -1), Eagle Eyes (SPA mod: 0 since it doesn't stack)
-            List<TargetRollModifier> modifiers = StratConRulesManager.getAllScoutRollModifiers(60, 8, true, true);
+            // has sensor equipment (equip mod: -2), Eagle Eyes (SPA mod: 0 since it doesn't stack)
+            List<TargetRollModifier> modifiers =
+                  StratConRulesManager.getAllScoutRollModifiers(60, 8, true, true, false);
 
             assertEquals(4, modifiers.size());
             assertEquals(2, modifiers.get(0).value());  // weight
             assertEquals(-1, modifiers.get(1).value()); // speed
-            assertEquals(-1, modifiers.get(2).value()); // equipment
+            assertEquals(-2, modifiers.get(2).value()); // equipment
             assertEquals(0, modifiers.get(3).value());  // SPA
         }
 
@@ -1187,7 +1189,7 @@ class StratConRulesManagerTest {
 
             assertEquals(person, bestScout.scout());
             assertEquals(S_SENSOR_OPERATIONS, skillCheck.getSkillType().getName());
-            assertEquals(3, skillCheck.getTargetNumber().getValue());
+            assertEquals(2, skillCheck.getTargetNumber().getValue());
             assertEquals(45.0, bestScout.unitWeight());
         }
 
@@ -1195,7 +1197,7 @@ class StratConRulesManagerTest {
         @CsvSource({ "true", "false" })
         void testBuildScoutMap_UseAgingModifiers(boolean useAgingEffects) {
             Person person = mockPerson(4, true);
-            getBestScoutForUnit(List.of(person), 45, 5, true, false, useAgingEffects, false);
+            getBestScoutForUnit(List.of(person), 45, 5, true, false, false, useAgingEffects, false);
             verify(person).getSkillModifierData(eq(useAgingEffects), eq(false), any(LocalDate.class));
         }
 
@@ -1203,7 +1205,7 @@ class StratConRulesManagerTest {
         @CsvSource({ "true", "false" })
         void testBuildScoutMap_IsClanCampaign(boolean isClanCampaign) {
             Person person = mockPerson(4, true);
-            getBestScoutForUnit(List.of(person), 45, 5, true, false, false, isClanCampaign);
+            getBestScoutForUnit(List.of(person), 45, 5, true, false, false, false, isClanCampaign);
             verify(person).getSkillModifierData(eq(false), eq(isClanCampaign), any(LocalDate.class));
         }
 
@@ -1262,19 +1264,39 @@ class StratConRulesManagerTest {
         @Test
         void testBuildScoutMap_TN_EagleEyes_AP() {
             ScoutRecord bestScout = getBestScoutForUnit(List.of(mockPerson(4, true)), 45, 5, false, true);
-            assertEquals(3, bestScout.skillCheck().getTargetNumber().getValue());
+            assertEquals(2, bestScout.skillCheck().getTargetNumber().getValue());
         }
 
         @Test
         void testBuildScoutMap_TN_EagleEyes_IS() {
             ScoutRecord bestScout = getBestScoutForUnit(List.of(mockPerson(4, true)), 45, 5, true, false);
-            assertEquals(3, bestScout.skillCheck().getTargetNumber().getValue());
+            assertEquals(2, bestScout.skillCheck().getTargetNumber().getValue());
         }
 
         @Test
         void testBuildScoutMap_TN_EagleEyes_IS_AP() {
             ScoutRecord bestScout = getBestScoutForUnit(List.of(mockPerson(4, true)), 45, 5, true, true);
+            assertEquals(2, bestScout.skillCheck().getTargetNumber().getValue());
+        }
+
+        @Test
+        void testBuildScoutMap_TN_ReconCamera() {
+            ScoutRecord bestScout = getBestScoutForUnit(List.of(mockPerson(4, false)), 45, 5, false, false, true);
             assertEquals(3, bestScout.skillCheck().getTargetNumber().getValue());
+        }
+
+        @Test
+        void testBuildScoutMap_TN_EagleEyes_ReconCamera() {
+            // Eagle Eyes does not stack with a camera
+            ScoutRecord bestScout = getBestScoutForUnit(List.of(mockPerson(4, true)), 45, 5, false, false, true);
+            assertEquals(3, bestScout.skillCheck().getTargetNumber().getValue());
+        }
+
+        @Test
+        void testBuildScoutMap_TN_AP_ReconCamera() {
+            // A camera does not stack with a probe
+            ScoutRecord bestScout = getBestScoutForUnit(List.of(mockPerson(4, false)), 45, 5, false, true, true);
+            assertEquals(2, bestScout.skillCheck().getTargetNumber().getValue());
         }
 
         @Test
@@ -1329,14 +1351,21 @@ class StratConRulesManagerTest {
 
         private ScoutRecord getBestScoutForUnit(List<Person> crew, double unitWeight, int unitSpeed,
               boolean hasImprovedSensors, boolean hasActiveProbe) {
-            return getBestScoutForUnit(crew, unitWeight, unitSpeed, hasImprovedSensors, hasActiveProbe, false, false);
+            return getBestScoutForUnit(crew, unitWeight, unitSpeed, hasImprovedSensors, hasActiveProbe, false);
+        }
+
+        private ScoutRecord getBestScoutForUnit(List<Person> crew, double unitWeight, int unitSpeed,
+              boolean hasImprovedSensors, boolean hasActiveProbe, boolean hasReconCamera) {
+            return getBestScoutForUnit(crew, unitWeight, unitSpeed, hasImprovedSensors, hasActiveProbe, hasReconCamera,
+                  false, false);
         }
 
         /**
          * Mocks a single unit with multiple crew members and gets the best scout
          */
         private ScoutRecord getBestScoutForUnit(List<Person> crew, double unitWeight, int unitSpeed,
-              boolean hasImprovedSensors, boolean hasActiveProbe, boolean useAgingEffects, boolean isClanCampaign) {
+              boolean hasImprovedSensors, boolean hasActiveProbe, boolean hasReconCamera, boolean useAgingEffects,
+              boolean isClanCampaign) {
             Formation formation = mock(Formation.class);
             mekhq.campaign.LocalHangar hangar = mock(mekhq.campaign.LocalHangar.class);
             Unit unit = mock(Unit.class);
@@ -1353,6 +1382,7 @@ class StratConRulesManagerTest {
                 scenarioFactory.when(() -> AtBDynamicScenarioFactory.calculateAtBSpeed(entity)).thenReturn(unitSpeed);
                 entityUtils.when(() -> EntityUtilities.hasImprovedSensors(entity)).thenReturn(hasImprovedSensors);
                 entityUtils.when(() -> EntityUtilities.hasActiveProbe(entity)).thenReturn(hasActiveProbe);
+                entityUtils.when(() -> EntityUtilities.hasReconCamera(entity)).thenReturn(hasReconCamera);
 
                 Campaign campaign = mockCampaign(useAgingEffects, isClanCampaign);
                 List<ScoutRecord> scouts = StratConRulesManager.buildScoutMap(formation, hangar, campaign);

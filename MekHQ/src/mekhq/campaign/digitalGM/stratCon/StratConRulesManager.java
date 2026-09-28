@@ -68,6 +68,7 @@ import static mekhq.campaign.personnel.skills.SkillType.S_ADMIN;
 import static mekhq.campaign.personnel.skills.SkillType.S_TACTICS;
 import static mekhq.utilities.EntityUtilities.hasActiveProbe;
 import static mekhq.utilities.EntityUtilities.hasImprovedSensors;
+import static mekhq.utilities.EntityUtilities.hasReconCamera;
 import static mekhq.utilities.MHQInternationalization.getFormattedTextAt;
 import static mekhq.utilities.MHQInternationalization.getTextAt;
 import static mekhq.utilities.ReportingUtilities.CLOSING_SPAN_TAG;
@@ -1904,13 +1905,22 @@ public class StratConRulesManager {
     /**
      * Generates a {@link TargetRollModifier} representing the effect of unit sensor equipment.
      *
-     * @param unitHasSensorEquipment flag signifying presence of sensor equipment
+     * <p>Active probes and Improved Sensors give -2. Recon Cameras and Camera Pods give -1. These do not stack: only
+     * the best equipment the unit carries counts.</p>
+     *
+     * @param unitHasSensorEquipment flag signifying presence of an active probe or Improved Sensors
+     * @param unitHasReconCamera     flag signifying presence of a Recon Camera or Camera Pod
      *
      * @return a {@link TargetRollModifier} reflecting bonuses from unit sensor equipment; will have a modifier value of
      *       0 if no qualifying equipment is present
      */
-    static TargetRollModifier getUnitEquipmentModifier(boolean unitHasSensorEquipment) {
-        int modifier = unitHasSensorEquipment ? -1 : 0;
+    static TargetRollModifier getUnitEquipmentModifier(boolean unitHasSensorEquipment, boolean unitHasReconCamera) {
+        int modifier = 0;
+        if (unitHasSensorEquipment) {
+            modifier = -2;
+        } else if (unitHasReconCamera) {
+            modifier = -1;
+        }
         return new TargetRollModifier(modifier, "Unit Sensor Equipment Modifier");
     }
 
@@ -1918,7 +1928,7 @@ public class StratConRulesManager {
      * Generates a {@link TargetRollModifier} representing the effect of complementary SPAs skills for a given scout.
      *
      * @param scoutHasEagleEyes      flag signifying if the scout has Eagle Eyes SPA
-     * @param unitHasSensorEquipment flag signifying presence of sensor equipment
+     * @param unitHasSensorEquipment flag signifying presence of any sensor equipment, including recon cameras
      *
      * @return a {@link TargetRollModifier} reflecting bonuses from complementary scouting skills; will have a modifier
      *       value of 0 if no qualifying skills are present
@@ -1939,17 +1949,19 @@ public class StratConRulesManager {
      * @param unitWeight             the unit's weight in tons
      * @param unitSpeed              the unit's speed
      * @param scoutHasEagleEyes      flag signifying if the scout has Eagle Eyes SPA
-     * @param unitHasSensorEquipment flag signifying presence of sensor equipment
+     * @param unitHasSensorEquipment flag signifying presence of an active probe or Improved Sensors
+     * @param unitHasReconCamera     flag signifying presence of a Recon Camera or Camera Pod
      *
      * @return a list of {@link TargetRollModifier} reflecting all bonuses scout has
      */
     static List<TargetRollModifier> getAllScoutRollModifiers(double unitWeight, int unitSpeed,
-          boolean scoutHasEagleEyes, boolean unitHasSensorEquipment) {
+          boolean scoutHasEagleEyes, boolean unitHasSensorEquipment, boolean unitHasReconCamera) {
         TargetRollModifier weightModifier = getUnitWeightModifier(unitWeight);
         TargetRollModifier speedModifier = getUnitSpeedModifier(unitSpeed);
-        TargetRollModifier sensorEquipmentModifier = getUnitEquipmentModifier(unitHasSensorEquipment);
+        TargetRollModifier sensorEquipmentModifier =
+              getUnitEquipmentModifier(unitHasSensorEquipment, unitHasReconCamera);
         TargetRollModifier scoutModifier =
-              getScoutComplementarySPAModifier(scoutHasEagleEyes, unitHasSensorEquipment);
+              getScoutComplementarySPAModifier(scoutHasEagleEyes, unitHasSensorEquipment || unitHasReconCamera);
         return List.of(weightModifier, speedModifier, sensorEquipmentModifier, scoutModifier);
     }
 
@@ -1994,12 +2006,14 @@ public class StratConRulesManager {
             double unitWeight = 200.0;
             int unitSpeed = 0;
             boolean hasSensorEquipment = false;
+            boolean hasReconCamera = false;
 
             Entity entity = unit.getEntity();
             if (entity != null) {
                 unitWeight = entity.getWeight();
                 unitSpeed = AtBDynamicScenarioFactory.calculateAtBSpeed(entity);
                 hasSensorEquipment = hasImprovedSensors(entity) || hasActiveProbe(entity);
+                hasReconCamera = hasReconCamera(entity);
 
                 if (unit.isOnlyCommandersMatter(campaign.getCampaignOptions())) {
                     Person commander = unit.getCommander();
@@ -2022,7 +2036,7 @@ public class StratConRulesManager {
                 }
 
                 List<TargetRollModifier> mods = getAllScoutRollModifiers(
-                      unitWeight, unitSpeed, hasEagleEyes, hasSensorEquipment);
+                      unitWeight, unitSpeed, hasEagleEyes, hasSensorEquipment, hasReconCamera);
                 SkillCheck skillCheck = crewMember.checkSkill(scoutSkillName, campaign).withExternalModifiers(mods);
 
                 if (bestScout == null || skillCheck.isEasierThan(bestScout.skillCheck())) {

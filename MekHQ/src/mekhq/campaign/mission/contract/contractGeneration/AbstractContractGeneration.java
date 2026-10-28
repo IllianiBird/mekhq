@@ -52,6 +52,7 @@ import mekhq.campaign.JumpPath;
 import mekhq.campaign.LocalHangar;
 import mekhq.campaign.campaignOptions.CampaignOption;
 import mekhq.campaign.campaignOptions.CampaignOptions;
+import mekhq.campaign.chaosCampaign.ChaosScaleLimits;
 import mekhq.campaign.digitalGM.stratCon.StratConCampaignState;
 import mekhq.campaign.finances.Money;
 import mekhq.campaign.force.Detachment;
@@ -69,6 +70,7 @@ import mekhq.campaign.universe.Planet;
 import mekhq.campaign.universe.PlanetarySystem;
 import mekhq.campaign.universe.RandomFactionGenerator;
 import mekhq.campaign.universe.Systems;
+import mekhq.campaign.universe.enums.HiringHallLevel;
 import mekhq.campaign.universe.factionStanding.FactionStandingUtilities;
 import mekhq.campaign.universe.factionStanding.FactionStandings;
 
@@ -403,16 +405,44 @@ public abstract class AbstractContractGeneration {
      * @param campaign         the campaign, for the support-point-to-Battle-Value scale conversion option
      * @param playerForce      the player force whose committed units set the scale
      * @param detachmentHangar the hangar whose units are weighed
-     * @param contract         the contract being sized (its objective decides whether cadre units count)
+     * @param contract         the contract being sized
      *
-     * @return the automatically determined scale
+     * @return the automatically determined exact (unrounded) scale
      */
-    public static int determineScale(Campaign campaign, PlayerForce playerForce, LocalHangar detachmentHangar,
+    public static double determineScale(Campaign campaign, PlayerForce playerForce, LocalHangar detachmentHangar,
           AbstractContract contract) {
+        double scale = determineUncappedScale(campaign, playerForce, detachmentHangar, contract);
+
+        // Hiring halls only broker jobs of the size they can support; a larger force is paid for the job, not itself
+        PlanetarySystem currentSystem = campaign.getCurrentSystem();
+        if (campaign.getCampaignOptions().get(CampaignOption.CAP_CONTRACT_SCALE_BY_HIRING_HALL)
+                  && currentSystem != null) {
+            HiringHallLevel hiringHallLevel = currentSystem.getHiringHallLevel(campaign.getLocalDate());
+            scale = Math.min(scale, ChaosScaleLimits.getMaximumContractScale(hiringHallLevel));
+        }
+
+        return scale;
+    }
+
+    /**
+     * Determines the Scale of the units the player force commits to a contract, ignoring any Hiring Hall cap.
+     *
+     * @param campaign         the campaign, for the support-point-to-Battle-Value scale conversion option
+     * @param playerForce      the player force whose committed units set the scale
+     * @param detachmentHangar the hangar whose units are weighed
+     * @param contract         the contract being sized
+     *
+     * @return the exact (unrounded) Scale of the committed force
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public static double determineUncappedScale(Campaign campaign, PlayerForce playerForce,
+          LocalHangar detachmentHangar, AbstractContract contract) {
         boolean convertSupportPointsToBattleValue = campaign.getCampaignOptions()
                                                           .get(CampaignOption.USE_CHAOS_SCALE_SUPPORT_POINT_CONVERSION);
         return ChaosContractDeterminationScale.generateScaleForDetachment(playerForce, detachmentHangar,
-              contract.getObjectiveType().isCadreDuty(), convertSupportPointsToBattleValue);
+              convertSupportPointsToBattleValue);
     }
 
     /**
@@ -473,7 +503,7 @@ public abstract class AbstractContractGeneration {
      * when {@link CampaignOption#USE_LEGACY_CONTRACT_PAY} is set, otherwise the Chaos scale-and-base-pay scheme.
      */
     public static Money determineMonthlyPay(Campaign campaign, AbstractContract contract) {
-        return AbstractContractDeterminationPay.forCampaign(campaign).getMonthlyPay(campaign, contract);
+        return AbstractContractDeterminationPay.forCampaign(campaign).getContractMonthlyPay(campaign, contract);
     }
 
     /**
@@ -687,11 +717,35 @@ public abstract class AbstractContractGeneration {
         // Scale" is set (the default MekHQ behavior), we instead roll the intensity table once per point of scale and
         // sum the results, so the contract's combat volume grows with scale while each scenario keeps its rolled size -
         // letting a player deploy smaller formations (e.g. lances). Otherwise, a single roll is made.
-        int rollCount = campaign.getCampaignOptions().get(CampaignOption.MULTIPLY_TRACK_INTENSITY_BY_SCALE)
+        contract.setScenarioSchedule(rollScenarioSchedule(campaign, contract, monthsLength));
+    }
+
+    /**
+     * Rolls a contract's Essential scenario schedule on the Track Intensity Tables: once per point of scale when
+     * "Multiply Track Intensity by Scale" is on, and once otherwise. The "Minimum of 1 Hot Spots Track per Roll" and
+     * "Roll Hot Spots Tracks Weekly, Not Monthly" options are honored (see
+     * {@link TrackIntensityTable#rollSchedule(int, int, int, boolean, boolean)}).
+     *
+     * @param campaign       the campaign, whose options decide the roll count
+     * @param contract       the contract, whose scale and track count are rolled for
+     * @param lengthInMonths the contract's length in months, choosing which table applies
+     *
+     * @return the scenario schedule as per-month scenario counts
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public static List<Integer> rollScenarioSchedule(Campaign campaign, AbstractContract contract,
+          int lengthInMonths) {
+        CampaignOptions campaignOptions = campaign.getCampaignOptions();
+        int rollCount = campaignOptions.get(CampaignOption.MULTIPLY_TRACK_INTENSITY_BY_SCALE)
                               ? contract.getScale()
                               : 1;
-        contract.setScenarioSchedule(TrackIntensityTable.rollSchedule(monthsLength, contract.getTrackCount(),
-              rollCount));
+        return TrackIntensityTable.rollSchedule(lengthInMonths,
+              contract.getTrackCount(),
+              rollCount,
+              campaignOptions.get(CampaignOption.MINIMUM_ONE_TRACK_PER_ROLL),
+              campaignOptions.get(CampaignOption.ROLL_TRACKS_WEEKLY));
     }
 
     private static @Nonnull EnemyData pickEnemy(Campaign campaign, LocalDate currentDate, ILocation currentLocation,

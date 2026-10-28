@@ -52,6 +52,7 @@ import javax.swing.event.DocumentListener;
 import javax.swing.table.TableColumn;
 import javax.swing.table.TableRowSorter;
 
+import jakarta.annotation.Nullable;
 import megamek.client.ui.preferences.JComboBoxPreference;
 import megamek.client.ui.preferences.JTablePreference;
 import megamek.client.ui.preferences.PreferencesNode;
@@ -74,18 +75,16 @@ import mekhq.campaign.events.parts.PartRemovedEvent;
 import mekhq.campaign.events.parts.PartWorkEvent;
 import mekhq.campaign.events.persons.PersonEvent;
 import mekhq.campaign.events.units.UnitChangedEvent;
+import mekhq.campaign.events.units.UnitNewEvent;
 import mekhq.campaign.events.units.UnitRefitEvent;
 import mekhq.campaign.events.units.UnitRemovedEvent;
-import mekhq.campaign.location.ILocation;
-import mekhq.campaign.location.LocationUtils;
 import mekhq.campaign.market.PartsInUseManager;
 import mekhq.campaign.parts.Part;
 import mekhq.campaign.parts.PartInUse;
 import mekhq.campaign.personnel.Person;
-import mekhq.campaign.personnel.skills.Skill;
-import mekhq.campaign.personnel.skills.SkillModifierData;
-import mekhq.campaign.personnel.skills.SkillType;
 import mekhq.campaign.unit.Unit;
+import mekhq.campaign.work.RepairTechEligibility;
+import mekhq.campaign.work.RepairTechEligibility.TechListToggles;
 import mekhq.gui.adapter.PartsTableMouseAdapter;
 import mekhq.gui.baseComponents.roundedComponents.RoundedJButton;
 import mekhq.gui.baseComponents.roundedComponents.RoundedLineBorder;
@@ -108,6 +107,7 @@ import mekhq.service.enums.MRMSMode;
  * Displays all spare parts in stock, parts on order, and permits repair of damaged parts.
  */
 public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel {
+    private static final int TECH_ROW_HEIGHT = 75;
     private static final MMLogger LOGGER = MMLogger.create(WarehouseTab.class);
     private static final String RESOURCE_BUNDLE = "mekhq.resources.CampaignGUI";
 
@@ -397,7 +397,8 @@ public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel
 
         techsModel = new TechTableModel(getCampaignGui(), this);
         techTable = new JTable(techsModel);
-        techTable.setRowHeight(UIUtil.scaleForGUI(60));
+        // Tall enough for a tech's name, skills, repair abilities and day
+        techTable.setRowHeight(UIUtil.scaleForGUI(TECH_ROW_HEIGHT));
         techTable.getColumnModel().getColumn(0).setCellRenderer(techsModel.getRenderer());
         techTable.getSelectionModel().addListSelectionListener(ev -> updateTechTarget());
         techSorter = new TableRowSorter<>(techsModel);
@@ -528,6 +529,13 @@ public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel
                 // Check grouping
                 boolean inGroup = PartsFilterGroup.matches(nGroup, part);
 
+                // Parts set aside for a refit or repair belong only in the views that track them
+                boolean isShownInThisView = part.isSpare() || (nGroupView == SV_IN_TRANSIT)
+                      || (nGroupView == SV_RESERVED);
+                if (!isShownInThisView) {
+                    return false;
+                }
+
                 // Check view
                 if (nGroupView == SV_ALL) {
                     inView = true;
@@ -573,42 +581,19 @@ public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel
 
     public void filterTechs() {
         final Part part = getSelectedTask();
+        // The bench works on spares, so there is no unit to suit; the switch widens the list beyond technicians
+        final TechListToggles toggles = new TechListToggles(false, btnShowAllTechsWarehouse.isSelected());
         RowFilter<TechTableModel, Integer> techTypeFilter = new RowFilter<>() {
             @Override
             public boolean include(Entry<? extends TechTableModel, ? extends Integer> entry) {
                 if (null == part) {
                     return false;
                 }
-                if (!part.needsFixing() && !part.isSalvaging()) {
-                    return false;
-                }
-                TechTableModel techModel = entry.getModel();
-                Person tech = techModel.getTechAt(entry.getIdentifier());
-                // Tech must be at the same location as the repair target
-                ILocation repairTarget = (part.getUnit() != null) ? part.getUnit() : part;
-                if (!LocationUtils.areSameEffectiveLocation(tech, repairTarget)) {
-                    return false;
-                }
-                if (!tech.isRightTechTypeFor(part) && !btnShowAllTechsWarehouse.isSelected()) {
-                    return false;
-                }
-                Skill skill = tech.getSkillForWorkingOn(part);
-                int modePenalty = part.getMode().expReduction;
-                if (skill == null) {
-                    return false;
-                } else if (part.getSkillMin() > SkillType.EXP_LEGENDARY) {
-                    return false;
-                } else if (tech.getMinutesLeft() <= 0) {
-                    return false;
-                } else {
-                    SkillModifierData skillModifierData = tech.getSkillModifierData();
-                    return getCampaign().getCampaignOptions().get(CampaignOption.DESTROY_BY_MARGIN) ||
-                                 (part.getSkillMin() <=
-                                        (skill.getExperienceLevel(skillModifierData) -
-                                               modePenalty));
-                }
+                Person tech = entry.getModel().getTechAt(entry.getIdentifier());
+                return RepairTechEligibility.findRefusal(getCampaign(), part, part.getUnit(), tech, toggles) == null;
             }
         };
+        ((TechSorter) techSorter.getComparator(0)).setPart(part);
         techSorter.setRowFilter(techTypeFilter);
     }
 
@@ -641,7 +626,6 @@ public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel
                     part.setTech(null);
                 }
             }
-            ((TechSorter) techSorter.getComparator(0)).clearPart();
         }
 
         if (null != target) {
@@ -656,6 +640,12 @@ public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel
     }
 
     private void refreshTechsList() {
+        // Gathering techs walks the personnel roster, which a bulk generation grows off the EDT; the
+        // OrganizationChangedEvent fired when it completes reschedules this refresh.
+        if (getCampaign().isBulkGenerationInProgress()) {
+            return;
+        }
+
         // The next gets all techs who have more than 0 minutes free, and sorted by
         // skill descending (elites at bottom)
         Campaign campaign = getCampaign();
@@ -727,7 +717,8 @@ public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel
         partsModel.setPartsInUse(partsInUseManager.getPartsInUse(true, false, QUALITY_A));
 
         LocationFilterItem locationFilter = getCampaignGui().getActiveLocation();
-        List<Part> parts = locationFilter.selectSpareParts(getCampaign());
+        // Reserved parts are listed too, but only the In Transit and Reserved views show them
+        List<Part> parts = locationFilter.selectHeldParts(getCampaign());
         partsModel.setData(parts);
         getCampaign().getPlayerForce().getShoppingList().removeZeroQuantityFromList(); // To
         // prevent
@@ -771,6 +762,11 @@ public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel
         if (null == selectedTech) {
             return;
         }
+        if (!part.isSpare()) {
+            LOGGER.debug("[Warehouse] {} is set aside for a refit or repair, so it is not worked on here",
+                  part.getName());
+            return;
+        }
         partId = part.getId();
 
         Part repairable = getCampaign().fixWarehousePart(part, selectedTech);
@@ -805,14 +801,28 @@ public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel
     private final ActionScheduler partsFilterScheduler = new ActionScheduler(this::filterParts);
     private final ActionScheduler techsScheduler = new ActionScheduler(this::refreshTechsList);
 
+    /**
+     * A unit arriving, leaving or changing (stripped, repaired, refitted) changes how many of each part are in use, so
+     * the In Use column is recounted, not just re-filtered. The scheduler runs one refresh for a burst of events.
+     */
     @Subscribe
-    public void handle(UnitRemovedEvent ev) {
-        filterParts();
+    public void handleUnitAdded(UnitNewEvent unitNewEvent) {
+        scheduleInUseRecount(unitNewEvent.getUnit(), "added");
     }
 
     @Subscribe
-    public void handle(UnitChangedEvent ev) {
-        filterParts();
+    public void handleUnitRemoved(UnitRemovedEvent unitRemovedEvent) {
+        scheduleInUseRecount(unitRemovedEvent.getUnit(), "removed");
+    }
+
+    @Subscribe
+    public void handleUnitChanged(UnitChangedEvent unitChangedEvent) {
+        scheduleInUseRecount(unitChangedEvent.getUnit(), "changed");
+    }
+
+    private void scheduleInUseRecount(@Nullable Unit unit, String change) {
+        LOGGER.debug("[Warehouse] {} {}; In Use will be recounted", (unit == null) ? "a unit" : unit.getName(), change);
+        partsScheduler.schedule();
     }
 
     @Subscribe
@@ -852,11 +862,13 @@ public final class WarehouseTab extends CampaignGuiTab implements ITechWorkPanel
      * A force generation adds its parts while {@link Campaign#isBulkGenerationInProgress()} is true, so every
      * {@link PartNewEvent} it raises is dropped by the guard at the top of {@link #refreshPartsList()}. Generation ends
      * by firing this event and nothing else, so without this handler no refresh ever runs against the finished
-     * campaign: the warehouse is full and the table still shows what it held before the build.
+     * campaign: the warehouse is full and the table still shows what it held before the build. The tech list is
+     * skipped during generation in the same way, so it is rescheduled here too.
      */
     @Subscribe
     public void handle(OrganizationChangedEvent ev) {
         partsScheduler.schedule();
+        techsScheduler.schedule();
     }
 
     @Subscribe

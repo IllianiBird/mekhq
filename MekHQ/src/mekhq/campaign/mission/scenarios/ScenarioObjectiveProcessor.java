@@ -51,7 +51,7 @@ import megamek.common.units.Entity;
 import mekhq.MHQConstants;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.ResolveScenarioTracker;
-import mekhq.campaign.digitalGM.stratCon.StratConRulesManager;
+import mekhq.campaign.digitalGM.stratCon.gm.StratConGMs;
 import mekhq.campaign.force.Formation;
 import mekhq.campaign.mission.contract.AbstractContract;
 import mekhq.campaign.mission.resupplyAndCaches.Resupply;
@@ -457,7 +457,7 @@ public class ScenarioObjectiveProcessor {
                         int effectMultiplier = effect.effectScaling == EffectScalingType.Fixed ? 1 : scaleFactor;
                         int numSupportPoints = effect.howMuch * effectMultiplier;
                         if (dryRun) {
-                            return String.format("%d support points will be added", numSupportPoints);
+                            return String.format("%d Employer Support will be added", numSupportPoints);
                         } else {
                             tracker.getMission().getStratConCampaignState().changeSupportPoints(numSupportPoints);
                         }
@@ -519,7 +519,7 @@ public class ScenarioObjectiveProcessor {
                     if (dryRun) {
                         return "This facility will not be captured.";
                     } else {
-                        StratConRulesManager.updateFacilityForScenario((AtBScenario) tracker.getScenario(),
+                        StratConGMs.facility(campaign.getCampaignOptions()).updateFacilityForScenario((AtBScenario) tracker.getScenario(),
                               tracker.getMission(),
                               false,
                               false);
@@ -531,7 +531,7 @@ public class ScenarioObjectiveProcessor {
                     if (dryRun) {
                         return "This facility will be destroyed.";
                     } else {
-                        StratConRulesManager.updateFacilityForScenario((AtBScenario) tracker.getScenario(),
+                        StratConGMs.facility(campaign.getCampaignOptions()).updateFacilityForScenario((AtBScenario) tracker.getScenario(),
                               tracker.getMission(),
                               true,
                               false);
@@ -543,7 +543,7 @@ public class ScenarioObjectiveProcessor {
                     if (dryRun) {
                         return "Allied forces will control this facility.";
                     } else {
-                        StratConRulesManager.updateFacilityForScenario((AtBScenario) tracker.getScenario(),
+                        StratConGMs.facility(campaign.getCampaignOptions()).updateFacilityForScenario((AtBScenario) tracker.getScenario(),
                               tracker.getMission(),
                               false,
                               true);

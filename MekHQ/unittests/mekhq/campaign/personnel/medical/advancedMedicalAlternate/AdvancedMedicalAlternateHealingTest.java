@@ -32,8 +32,6 @@
  */
 package mekhq.campaign.personnel.medical.advancedMedicalAlternate;
 
-import static org.mockito.Mockito.lenient;
-
 import static mekhq.campaign.personnel.PersonnelOptions.ATOW_FIT;
 import static mekhq.campaign.personnel.PersonnelOptions.ATOW_TOUGHNESS;
 import static mekhq.campaign.personnel.PersonnelOptions.EDGE_MEDICAL;
@@ -59,6 +57,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
@@ -68,6 +67,7 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -77,14 +77,15 @@ import megamek.common.TargetRollModifier;
 import megamek.common.compute.Compute;
 import megamek.common.enums.Gender;
 import mekhq.campaign.Campaign;
-import mekhq.campaign.campaignOptions.CampaignOptions;
 import mekhq.campaign.campaignOptions.CampaignOption;
+import mekhq.campaign.campaignOptions.CampaignOptions;
 import mekhq.campaign.log.MedicalLogger;
 import mekhq.campaign.log.PatientLogger;
 import mekhq.campaign.personnel.Injury;
 import mekhq.campaign.personnel.InjuryType;
 import mekhq.campaign.personnel.Person;
 import mekhq.campaign.personnel.PersonnelOptions;
+import mekhq.campaign.personnel.enums.PersonnelStatus;
 import mekhq.campaign.personnel.medical.BodyLocation;
 import mekhq.campaign.personnel.medical.advancedMedical.InjuryUtil;
 import mekhq.campaign.personnel.skills.ActionCheckResult;
@@ -92,6 +93,7 @@ import mekhq.campaign.personnel.skills.ActionCheckRoll;
 import mekhq.campaign.personnel.skills.AttributeCheck;
 import mekhq.campaign.personnel.skills.SkillCheck;
 import mekhq.campaign.personnel.skills.enums.SkillAttribute;
+import mekhq.campaign.personnel.turnoverAndRetention.Fatigue;
 import mekhq.campaign.randomEvents.prisoners.PrisonerStatus;
 import mekhq.utilities.MHQInternationalization;
 import org.junit.jupiter.api.DisplayName;
@@ -366,6 +368,7 @@ class AdvancedMedicalAlternateHealingTest {
     void getMarginOfSuccessForHealing_usesEdgeReroll() throws Exception {
         Campaign campaign = mock(Campaign.class);
         Person doctor = mock(Person.class);
+        Person patient = mock(Person.class);
         SkillCheck skillCheck = mock(SkillCheck.class);
         ActionCheckRoll firstActionCheckRoll = new ActionCheckRoll(2, List.of(1, 1));
         ActionCheckResult first = new ActionCheckResult(firstActionCheckRoll, -4, false, "first");
@@ -382,9 +385,12 @@ class AdvancedMedicalAlternateHealingTest {
             i18n.when(() -> MHQInternationalization.getTextAt(anyString(), anyString())).thenAnswer(invocation ->
                                                                                                           invocation.getArgument(
                                                                                                                 1));
+            i18n.when(() -> MHQInternationalization.getFormattedTextAt(anyString(), anyString(), any()))
+                  .thenAnswer(invocation -> invocation.getArgument(1));
 
             int margin = invokePrivateStatic("getMarginOfSuccessForHealing",
                   new Class<?>[] {
+                        Person.class,
                         Person.class,
                         Campaign.class,
                         List.class,
@@ -394,6 +400,7 @@ class AdvancedMedicalAlternateHealingTest {
                         boolean.class
                   },
                   doctor,
+                  patient,
                   campaign,
                   List.of(),
                   6,
@@ -455,11 +462,13 @@ class AdvancedMedicalAlternateHealingTest {
         when(campaignOptions.get(CampaignOption.USE_FATIGUE)).thenReturn(true);
         when(campaignOptions.get(CampaignOption.FATIGUE_RATE)).thenReturn(3);
         when(patient.getInjuries()).thenReturn(List.of(injury));
+        when(patient.getStatus()).thenReturn(PersonnelStatus.ACTIVE);
         when(injury.getOriginalTime()).thenReturn(7);
         when(injury.getName()).thenReturn("Burn");
 
         try (MockedStatic<Compute> compute = mockStatic(Compute.class);
-              MockedStatic<MedicalLogger> medicalLogger = mockStatic(MedicalLogger.class)) {
+              MockedStatic<MedicalLogger> medicalLogger = mockStatic(MedicalLogger.class);
+              MockedStatic<Fatigue> fatigue = mockStatic(Fatigue.class)) {
             compute.when(() -> Compute.d6(1)).thenReturn(5);
             HealingMarginOfSuccessEffects effect = invokePrivateStatic("processHealingEffects",
                   new Class<?>[] { Campaign.class, Person.class, Injury.class, int.class },
@@ -468,6 +477,7 @@ class AdvancedMedicalAlternateHealingTest {
             assertSame(HealingMarginOfSuccessEffects.RECOVERY_DELAYED, effect);
             verify(injury).changeTime(5);
             verify(patient).changeFatigue(15);
+            fatigue.verify(() -> Fatigue.processFatigueActions(campaign, patient));
             medicalLogger.verifyNoInteractions();
         }
     }
@@ -509,6 +519,79 @@ class AdvancedMedicalAlternateHealingTest {
             verify(patient).addInjury(any(Injury.class));
             medicalLogger.verifyNoInteractions();
         }
+    }
+
+    /**
+     * Runs a healing attempt that makes the injury permanent and adds a medical complication, with fatigue enabled,
+     * and returns the order in which the complication and fatigue actions happened.
+     */
+    private static List<String> runComplicationWithFatigue(Person patient) throws Exception {
+        Campaign campaign = mock(Campaign.class);
+        CampaignOptions campaignOptions = mock(CampaignOptions.class);
+        Injury injury = mock(Injury.class);
+        PersonnelOptions patientOptions = mock(PersonnelOptions.class);
+
+        when(campaign.getCampaignOptions()).thenReturn(campaignOptions);
+        lenient().when(campaignOptions.get(CampaignOption.USE_ALTERNATIVE_ADVANCED_MEDICAL)).thenReturn(false);
+        lenient().when(campaignOptions.get(CampaignOption.USE_ALTERNATIVE_ADVANCED_MEDICAL_FEWER_PERMANENT_INJURIES)).thenReturn(false);
+        when(campaignOptions.get(CampaignOption.USE_FATIGUE)).thenReturn(true);
+        when(campaignOptions.get(CampaignOption.FATIGUE_RATE)).thenReturn(1);
+        when(campaign.getLocalDate()).thenReturn(MONDAY);
+        when(patient.getOptions()).thenReturn(patientOptions);
+        when(patientOptions.booleanOption(anyString())).thenReturn(false);
+        when(patient.getGender()).thenReturn(Gender.MALE);
+        when(patient.getInjuries()).thenReturn(List.of(injury));
+        when(injury.getName()).thenReturn("Crush injury");
+
+        List<String> events = new ArrayList<>();
+        doAnswer(invocation -> {
+            events.add("complication");
+            return null;
+        }).when(patient).addInjury(any(Injury.class));
+
+        try (MockedStatic<InjuryUtil> injuryUtil = mockStatic(InjuryUtil.class);
+              MockedStatic<MedicalLogger> ignoredMedicalLogger = mockStatic(MedicalLogger.class);
+              MockedStatic<Compute> compute = mockStatic(Compute.class);
+              MockedStatic<Fatigue> fatigue = mockStatic(Fatigue.class)) {
+            Object medicalComplication = Class.forName(
+                        "mekhq.campaign.personnel.medical.advancedMedicalAlternate.AlternateInjuries")
+                                               .getField("MEDICAL_COMPLICATION")
+                                               .get(null);
+            injuryUtil.when(() -> InjuryUtil.genHealingTime(campaign, patient, (InjuryType) medicalComplication, 1))
+                  .thenReturn(1);
+            compute.when(() -> Compute.d6(1)).thenReturn(5);
+            fatigue.when(() -> Fatigue.processFatigueActions(campaign, patient)).thenAnswer(invocation -> {
+                events.add("fatigue");
+                return null;
+            });
+
+            invokePrivateStatic("processHealingEffects",
+                  new Class<?>[] { Campaign.class, Person.class, Injury.class, int.class },
+                  campaign, patient, injury, -6);
+        }
+
+        return events;
+    }
+
+    @Test
+    @DisplayName("processHealingEffects processes fatigue actions after adding a medical complication")
+    void processHealingEffects_processesFatigueAfterComplication() throws Exception {
+        Person patient = mock(Person.class);
+        when(patient.getStatus()).thenReturn(PersonnelStatus.ACTIVE);
+
+        // If fatigue were processed first, the leave check could miss the complication and send the patient on leave
+        assertEquals(List.of("complication", "fatigue"), runComplicationWithFatigue(patient));
+    }
+
+    @Test
+    @DisplayName("processHealingEffects skips fatigue actions when the complication kills the patient")
+    void processHealingEffects_skipsFatigueWhenComplicationKills() throws Exception {
+        Person patient = mock(Person.class);
+        when(patient.getTotalInjurySeverity()).thenReturn(100);
+        when(patient.getStatus()).thenReturn(PersonnelStatus.MEDICAL_COMPLICATIONS);
+
+        assertEquals(List.of("complication"), runComplicationWithFatigue(patient));
+        verify(patient).changeStatus(any(Campaign.class), eq(MONDAY), eq(PersonnelStatus.MEDICAL_COMPLICATIONS));
     }
 
     @Test

@@ -61,7 +61,10 @@ import mekhq.campaign.campaignOptions.CampaignOption;
 import mekhq.campaign.campaignOptions.CampaignOptions;
 import mekhq.campaign.digitalGM.stratCon.StratConContractDefinition.StrategicObjectiveType;
 import mekhq.campaign.digitalGM.stratCon.facility.StratConFacility;
+import mekhq.campaign.digitalGM.stratCon.facility.StratConFacility.FacilityType;
+import mekhq.campaign.digitalGM.stratCon.facility.StratConFacilityEffects.LocalModifiersEffect;
 import mekhq.campaign.digitalGM.stratCon.facility.StratConFacilityFactory;
+import mekhq.campaign.digitalGM.stratCon.facility.StratConFacilityOrder;
 import mekhq.campaign.digitalGM.stratCon.pointOfInterest.StratConPointOfInterestRules;
 import mekhq.campaign.force.CombatTeam;
 import mekhq.campaign.force.Formation;
@@ -70,6 +73,7 @@ import mekhq.campaign.mission.contract.AbstractContract;
 import mekhq.campaign.mission.scenarios.AtBDynamicScenario;
 import mekhq.campaign.mission.scenarios.AtBDynamicScenarioFactory;
 import mekhq.campaign.mission.scenarios.ScenarioForceTemplate;
+import mekhq.campaign.mission.scenarios.ScenarioForceTemplate.ForceAlignment;
 import mekhq.campaign.mission.scenarios.ScenarioMapParameters.MapLocation;
 import mekhq.campaign.mission.scenarios.ScenarioTemplate;
 import mekhq.campaign.mission.scenarios.ScenarioType;
@@ -84,6 +88,7 @@ import mekhq.campaign.personnel.skills.Skill;
 import mekhq.campaign.personnel.skills.SkillCheck;
 import mekhq.campaign.personnel.skills.SkillModifierData;
 import mekhq.campaign.personnel.skills.SkillType;
+import mekhq.campaign.personnel.turnoverAndRetention.Fatigue;
 import mekhq.campaign.unit.Unit;
 import mekhq.campaign.universe.Planet;
 import mekhq.gui.dialog.StratConAmbushedDialog;
@@ -168,12 +173,17 @@ class StratConRulesManagerTest {
     @Test
     void initializeObjectiveScenarios_doesNotAddObjectiveWhenScenarioGenerationFails() throws Exception {
         Campaign campaign = MHQTestUtilities.mockCampaign();
+        CampaignOptions campaignOptions = mock(CampaignOptions.class);
+        when(campaignOptions.get(CampaignOption.USE_CHAOS_SCALE_SUPPORT_POINT_CONVERSION)).thenReturn(false);
+        when(campaign.getCampaignOptions()).thenReturn(campaignOptions);
         AbstractContract contract = mock(AbstractContract.class);
         StratConTrackState track = new StratConTrackState();
         track.setWidth(1);
         track.setHeight(1);
         ScenarioTemplate template = mock(ScenarioTemplate.class);
-        StratConFacility facility = new StratConFacility();
+        StratConFacility facility = StratConTestData.facility(ForceAlignment.Opposing,
+              FacilityType.MekBase,
+              new LocalModifiersEffect(List.of("MekGarrison.json")));
 
         try (MockedStatic<StratConScenarioFactory> scenarioFactory = mockStatic(StratConScenarioFactory.class);
               MockedStatic<StratConFacilityFactory> facilityFactory = mockStatic(StratConFacilityFactory.class);
@@ -463,7 +473,7 @@ class StratConRulesManagerTest {
      */
     private void stubScenarioGeneration(MockedStatic<StratConScenarioFactory> scenarioFactory,
           MockedStatic<StratConRulesManager> rulesManager) {
-        scenarioFactory.when(() -> StratConScenarioFactory.getRandomScenario(anyInt(), anyBoolean(), anyBoolean()))
+        scenarioFactory.when(() -> StratConScenarioFactory.getRandomScenario(anyInt(), anyBoolean(), anyBoolean(), any()))
               .thenReturn(mock(ScenarioTemplate.class));
         rulesManager.when(() -> StratConRulesManager.calculateScenarioOdds(any(), any(), anyBoolean()))
               .thenReturn(100);
@@ -495,7 +505,7 @@ class StratConRulesManagerTest {
             StratConRulesManager.deployForceToCoords(fixture.coords(), fixture.forceID(), fixture.campaign(),
                   fixture.contract(), fixture.track(), false);
 
-            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), eq(false)));
+            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), eq(false), any()));
             assertEquals(List.of(false), dialogBungledArgs);
         }
     }
@@ -520,7 +530,7 @@ class StratConRulesManagerTest {
             StratConRulesManager.deployForceToCoords(fixture.coords(), fixture.forceID(), fixture.campaign(),
                   fixture.contract(), fixture.track(), false);
 
-            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), eq(true)));
+            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), eq(true), any()));
             assertEquals(List.of(true), dialogBungledArgs);
             // Pinned to the deployed hex: the scenario is built for the force already there, not migrated away.
             rulesManager.verify(() -> StratConRulesManager.generateScenarioForExistingForces(eq(fixture.coords()),
@@ -547,7 +557,7 @@ class StratConRulesManagerTest {
             StratConRulesManager.deployForceToCoords(fixture.coords(), fixture.forceID(), fixture.campaign(),
                   fixture.contract(), fixture.track(), false);
 
-            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), anyBoolean()),
+            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), anyBoolean(), any()),
                   never());
             assertTrue(dialogBungledArgs.isEmpty());
         }
@@ -735,7 +745,7 @@ class StratConRulesManagerTest {
           MockedStatic<StratConRulesManager> rulesManager,
           MockedStatic<StratConContractInitializer> contractInitializer, StratConCoords coords) {
         ScenarioTemplate ambushTemplate = mock(ScenarioTemplate.class);
-        scenarioFactory.when(() -> StratConScenarioFactory.getRandomScenario(anyInt(), anyBoolean(), anyBoolean()))
+        scenarioFactory.when(() -> StratConScenarioFactory.getRandomScenario(anyInt(), anyBoolean(), anyBoolean(), any()))
               .thenReturn(ambushTemplate);
         rulesManager.when(() -> StratConRulesManager.getAvailableForceIDs(any(), any(), anyBoolean()))
               .thenReturn(new ArrayList<>());
@@ -769,7 +779,7 @@ class StratConRulesManagerTest {
                   fixture.contract(), 1);
 
             // Ambush template requested for the deployed force (non-patrol, so not a bungled patrol) ...
-            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), eq(false)));
+            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), eq(false), any()));
             // ... and passed through to the existing-forces generation for the occupied hex.
             rulesManager.verify(() -> StratConRulesManager.generateScenarioForExistingForces(eq(fixture.coords()),
                   eq(fixture.assignedForceIDs()), eq(fixture.contract()), eq(fixture.campaign()), eq(fixture.track()),
@@ -796,7 +806,7 @@ class StratConRulesManagerTest {
             StratConRulesManager.generateDailyScenariosForTrack(fixture.campaign(), fixture.campaignState(),
                   fixture.contract(), 1);
 
-            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), eq(true)));
+            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), eq(true), any()));
             rulesManager.verify(() -> StratConRulesManager.generateScenarioForExistingForces(eq(fixture.coords()),
                   any(), any(), any(), any(), eq(ambushTemplate), isNull()));
         }
@@ -823,7 +833,7 @@ class StratConRulesManagerTest {
             StratConRulesManager.generateDailyScenariosForTrack(fixture.campaign(), fixture.campaignState(),
                   fixture.contract(), 1);
 
-            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), anyBoolean()),
+            scenarioFactory.verify(() -> StratConScenarioFactory.getRandomScenario(anyInt(), eq(true), anyBoolean(), any()),
                   never());
             rulesManager.verify(() -> StratConRulesManager.generateScenarioForExistingForces(any(), any(), any(),
                   any(), any(), any(), any()), never());
@@ -1502,7 +1512,8 @@ class StratConRulesManagerTest {
     /**
      * Covers how a deployed force scans the hexes around it: scan range, the advanced scouting single roll per scout,
      * light scouts' extra range, failed rolls, already-revealed hexes, and the early exit when the deployment hex holds
-     * a scenario.
+     * a scenario. Also covers patrols told to Remain Deployed, which scout again instead of returning until their whole
+     * area is scouted.
      */
     @Nested
     class ScanNeighboringCoords {
@@ -1770,6 +1781,170 @@ class StratConRulesManagerTest {
             doReturn(scenario).when(track).getScenario(CENTER);
             scan(mockScout(HEAVY_SCOUT_WEIGHT));
 
+            assertEquals(1, revealedCount());
+        }
+
+        // -- Remain Deployed patrols --
+
+        private static final LocalDate TODAY = LocalDate.of(3050, 1, 1);
+        private static final int DEPLOYMENT_TIME = 7;
+
+        private void revealFirstRing(int hexCount) {
+            track.getRevealedCoords().add(CENTER);
+            for (int direction = 0; direction < hexCount; direction++) {
+                track.getRevealedCoords().add(CENTER.translate(direction));
+            }
+        }
+
+        private void deployRemainDeployedPatrol() {
+            setPatrol();
+            when(campaign.getLocalDate()).thenReturn(TODAY);
+            track.setDeploymentTime(DEPLOYMENT_TIME);
+            track.assignForce(FORCE_ID, CENTER, TODAY.minusDays(DEPLOYMENT_TIME), true);
+        }
+
+        /**
+         * Runs a Remain Deployed patrol's scouting with the given scouts standing in for the ones
+         * {@code buildScoutMap} would find.
+         */
+        private boolean scoutRemainingPatrolArea(ScoutRecord... scouts) {
+            try (MockedStatic<StratConRulesManager> rulesManager = mockStatic(StratConRulesManager.class,
+                  CALLS_REAL_METHODS);
+                  MockedStatic<StratConPointOfInterestRules> ignored = mockStatic(StratConPointOfInterestRules.class);
+                  MockedStatic<StratConReconnaissance> ignoredReconnaissance =
+                        mockStatic(StratConReconnaissance.class)) {
+                rulesManager.when(() -> StratConRulesManager.buildScoutMap(any(), any(), any()))
+                      .thenReturn(new ArrayList<>(List.of(scouts)));
+                return StratConRulesManager.scoutRemainingPatrolArea(FORCE_ID, track, campaign);
+            }
+        }
+
+        @ParameterizedTest
+        @CsvSource({ "50.0, 1, true, 1", "35.0, 1, true, 2", "35.0, 1, false, 1", "35.0, 0, true, 1" })
+        void getIndividualScanRange_lightScoutsReachFurtherOnlyUnderAdvancedScouting(double unitWeight,
+              int scanRangeIncrease, boolean useAdvancedScouting, int expectedRange) {
+            assertEquals(expectedRange,
+                  StratConRulesManager.getIndividualScanRange(unitWeight, scanRangeIncrease, useAdvancedScouting));
+        }
+
+        @Test
+        void isAreaFullyScouted_trueWhenEveryHexInRadiusIsRevealed() {
+            setUp(true, 0);
+            revealFirstRing(6);
+
+            assertTrue(StratConRulesManager.isAreaFullyScouted(CENTER, 1, track));
+        }
+
+        @Test
+        void isAreaFullyScouted_falseWhenAHexInRadiusIsUnrevealed() {
+            setUp(true, 0);
+            revealFirstRing(5);
+
+            assertFalse(StratConRulesManager.isAreaFullyScouted(CENTER, 1, track));
+        }
+
+        @Test
+        void isAreaFullyScouted_falseWhenTheCenterIsUnrevealed() {
+            setUp(true, 0);
+
+            assertFalse(StratConRulesManager.isAreaFullyScouted(CENTER, 0, track));
+        }
+
+        @Test
+        void isAreaFullyScouted_ignoresOffTrackHexes() {
+            setUp(true, 0);
+            track.setWidth(1);
+            track.setHeight(1);
+            StratConCoords corner = new StratConCoords(0, 0);
+            track.getRevealedCoords().add(corner);
+
+            assertTrue(StratConRulesManager.isAreaFullyScouted(corner, 2, track));
+        }
+
+        @Test
+        void isPatrolScoutingUntilDone_trueForPatrolUnderAdvancedScouting() {
+            setUp(true, 0);
+            setPatrol();
+
+            assertTrue(StratConRulesManager.isPatrolScoutingUntilDone(FORCE_ID, track, campaign));
+        }
+
+        @Test
+        void isPatrolScoutingUntilDone_falseWithoutAdvancedScouting() {
+            setUp(false, 0);
+            setPatrol();
+
+            assertFalse(StratConRulesManager.isPatrolScoutingUntilDone(FORCE_ID, track, campaign));
+        }
+
+        @Test
+        void isPatrolScoutingUntilDone_falseForNonPatrol() {
+            setUp(true, 0);
+
+            assertFalse(StratConRulesManager.isPatrolScoutingUntilDone(FORCE_ID, track, campaign));
+        }
+
+        @Test
+        void isPatrolScoutingUntilDone_falseWhenHeldByAFacilityOrder() {
+            setUp(true, 0);
+            setPatrol();
+            doReturn(mock(StratConFacilityOrder.class)).when(track).getFacilityOrder(FORCE_ID);
+
+            assertFalse(StratConRulesManager.isPatrolScoutingUntilDone(FORCE_ID, track, campaign));
+        }
+
+        @Test
+        void scoutRemainingPatrolArea_alreadyFullyScouted_returnsWithoutRolling() {
+            setUp(true, 0);
+            deployRemainDeployedPatrol();
+            revealFirstRing(6);
+            ScoutRecord scout = mockScout(HEAVY_SCOUT_WEIGHT, true);
+
+            assertTrue(scoutRemainingPatrolArea(scout));
+            verify(scout.skillCheck(), never()).resolve(anyBoolean(), any());
+        }
+
+        @Test
+        void scoutRemainingPatrolArea_hexesLeft_staysOutUntilNextReturn() {
+            setUp(true, 0);
+            deployRemainDeployedPatrol();
+            revealFirstRing(0);
+            ScoutRecord scout = mockScout(HEAVY_SCOUT_WEIGHT, true);
+
+            assertFalse(scoutRemainingPatrolArea(scout));
+            assertEquals(2, revealedCount());
+            verify(scout.skillCheck(), times(1)).resolve(anyBoolean(), any());
+            assertEquals(TODAY.plusDays(DEPLOYMENT_TIME), track.getAssignedForceReturnDates().get(FORCE_ID));
+        }
+
+        @Test
+        void scoutRemainingPatrolArea_scoutingTheLastHex_returns() {
+            setUp(true, 0);
+            deployRemainDeployedPatrol();
+            revealFirstRing(5);
+
+            assertTrue(scoutRemainingPatrolArea(mockScout(HEAVY_SCOUT_WEIGHT, true)));
+            assertEquals(7, revealedCount());
+        }
+
+        @Test
+        void scoutRemainingPatrolArea_lightScoutMustScoutTheSecondRingToo() {
+            setUp(true, 0);
+            deployRemainDeployedPatrol();
+            revealFirstRing(6);
+
+            // the light scout reaches two hexes out, so the patrol isn't done until the second ring is scouted
+            assertFalse(scoutRemainingPatrolArea(mockScout(LIGHT_SCOUT_WEIGHT, true)));
+            assertEquals(8, revealedCount());
+        }
+
+        @Test
+        void scoutRemainingPatrolArea_onAScenario_returnsOnceItsOwnHexIsScouted() {
+            setUp(true, 0);
+            deployRemainDeployedPatrol();
+            doReturn(mock(StratConScenario.class)).when(track).getScenario(CENTER);
+
+            assertTrue(scoutRemainingPatrolArea(mockScout(HEAVY_SCOUT_WEIGHT, true)));
             assertEquals(1, revealedCount());
         }
     }
@@ -2107,6 +2282,58 @@ class StratConRulesManagerTest {
             assertTrue(standardOnly.contains(frontlineDropShip));
             assertTrue(standardOnly.contains(reserveDropShip));
             assertFalse(standardOnly.contains(supportDropShip));
+        }
+    }
+
+    @Nested
+    class IncreaseFatigue {
+        private static final int FORCE_ID = 7;
+
+        private Campaign campaign;
+        private CampaignOptions campaignOptions;
+        private Person crewMember;
+
+        private void setUp(boolean useFatigue, int fatigueRate) {
+            campaign = MHQTestUtilities.mockCampaign();
+            campaignOptions = mock(CampaignOptions.class);
+            when(campaign.getCampaignOptions()).thenReturn(campaignOptions);
+            when(campaignOptions.get(CampaignOption.USE_FATIGUE)).thenReturn(useFatigue);
+            when(campaignOptions.get(CampaignOption.FATIGUE_RATE)).thenReturn(fatigueRate);
+
+            Formation formation = mock(Formation.class);
+            when(campaign.getPlayerForce().getFormation(FORCE_ID)).thenReturn(formation);
+
+            UUID unitId = UUID.randomUUID();
+            when(formation.getAllUnits(false)).thenReturn(new Vector<>(List.of(unitId)));
+
+            crewMember = mock(Person.class);
+            Unit unit = mock(Unit.class);
+            when(campaign.getUnit(unitId)).thenReturn(unit);
+            when(unit.getCrew()).thenReturn(List.of(crewMember));
+        }
+
+        @Test
+        void addsFatigueRateToEveryCrewMember() {
+            setUp(true, 2);
+
+            try (MockedStatic<Fatigue> fatigue = mockStatic(Fatigue.class)) {
+                StratConRulesManager.increaseFatigue(FORCE_ID, campaign);
+
+                verify(crewMember).changeFatigue(2);
+                fatigue.verify(() -> Fatigue.processFatigueActions(campaign, crewMember));
+            }
+        }
+
+        @Test
+        void doesNothingWhenFatigueDisabled() {
+            setUp(false, 2);
+
+            try (MockedStatic<Fatigue> fatigue = mockStatic(Fatigue.class)) {
+                StratConRulesManager.increaseFatigue(FORCE_ID, campaign);
+
+                verify(crewMember, never()).changeFatigue(anyInt());
+                fatigue.verifyNoInteractions();
+            }
         }
     }
 }

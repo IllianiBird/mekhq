@@ -42,7 +42,7 @@ import mekhq.MekHQ;
 import mekhq.Utilities;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.digitalGM.stratCon.StratConContractDefinition;
-import mekhq.campaign.digitalGM.stratCon.facility.StratConFacility;
+import mekhq.campaign.digitalGM.stratCon.facility.StratConFacilityDefinition;
 import mekhq.campaign.digitalGM.stratCon.pointOfInterest.StratConPointOfInterestDefinition;
 import mekhq.campaign.mission.scenarios.Scenario;
 import mekhq.campaign.mission.scenarios.ScenarioTemplate;
@@ -344,6 +344,8 @@ public class FileDialogs {
     private static final String STRAT_CON_FACILITY_DIRECTORY = developerDataDirectory("stratconfacilities");
     private static final String STRAT_CON_POINT_OF_INTEREST_DIRECTORY = developerDataDirectory(
           "stratconpointsofinterest");
+    private static final String FACTION_STANDING_ULTIMATUM_DIRECTORY = developerDataDirectory(
+          "universe/factionStandingUltimatums");
 
     /**
      * Resolves a data subdirectory for the StratCon/scenario Developer Tools editors. In a source checkout the
@@ -418,19 +420,17 @@ public class FileDialogs {
     }
 
     /**
-     * Displays a dialog window from which the user can select a StratCon facility file to save to. The suggested file
-     * name follows the shipped convention of an owner prefix plus the display name (e.g. {@code AlliedAirBase.json}).
+     * Displays a dialog window from which the user can select a StratCon facility definition file to save to. The
+     * suggested file name is the definition's ID (e.g. {@code AirBase.json}).
      *
      * @return the file selected, if any
      */
-    public static Optional<File> saveStratConFacility(JFrame frame, StratConFacility facility) {
-        String display = facility.getDisplayableName();
-        String fileName;
-        if ((display == null) || display.isBlank()) {
+    public static Optional<File> saveStratConFacility(JFrame frame, StratConFacilityDefinition definition) {
+        String id = definition.getId();
+        // Strip first, so an ID made only of stripped characters still falls back to the default name.
+        String fileName = (id == null) ? "" : id.replaceAll("[^A-Za-z0-9_-]", "");
+        if (fileName.isBlank()) {
             fileName = "facility";
-        } else {
-            String prefix = facility.isOwnerAlliedToPlayer() ? "Allied" : "Hostile";
-            fileName = prefix + display.replaceAll("[^A-Za-z0-9]", "");
         }
         return GUI.fileDialogSave(frame, "Save StratCon Facility", FileType.JSON, STRAT_CON_FACILITY_DIRECTORY,
               fileName + ".json");
@@ -470,6 +470,41 @@ public class FileDialogs {
               "Save StratCon Point of Interest",
               FileType.JSON,
               STRAT_CON_POINT_OF_INTEREST_DIRECTORY,
+              fileName + ".json");
+    }
+
+    /**
+     * Displays a dialog window from which the user can select a Faction Standing ultimatum file to load.
+     *
+     * @return the file selected, if any
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public static Optional<File> openFactionStandingUltimatum(JFrame frame) {
+        return GUI.fileDialogOpen(frame,
+              "Load Faction Standing Ultimatum",
+              FileType.JSON,
+              FACTION_STANDING_ULTIMATUM_DIRECTORY);
+    }
+
+    /**
+     * Displays a dialog window from which the user can select a Faction Standing ultimatum file to save to. The
+     * suggested file name is the ultimatum's name, as the shipped files are named (e.g. {@code EXODUS.json}).
+     *
+     * @param ultimatumName the name of the ultimatum being saved; may be blank
+     *
+     * @return the file selected, if any
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public static Optional<File> saveFactionStandingUltimatum(JFrame frame, String ultimatumName) {
+        String fileName = ultimatumName.isBlank() ? "ultimatum" : ultimatumName.replaceAll("[^A-Za-z0-9_]", "");
+        return GUI.fileDialogSave(frame,
+              "Save Faction Standing Ultimatum",
+              FileType.JSON,
+              FACTION_STANDING_ULTIMATUM_DIRECTORY,
               fileName + ".json");
     }
 

@@ -42,6 +42,7 @@ import static mekhq.campaign.personnel.medical.BodyLocation.GENERIC;
 import static mekhq.campaign.personnel.medical.advancedMedicalAlternate.HealingMarginOfSuccessEffects.getEffectFromHealingAttempt;
 import static mekhq.campaign.personnel.skills.SkillType.S_SURGERY;
 import static mekhq.campaign.personnel.skills.enums.SkillAttribute.BODY;
+import static mekhq.utilities.MHQInternationalization.getFormattedTextAt;
 import static mekhq.utilities.MHQInternationalization.getTextAt;
 
 import java.time.DayOfWeek;
@@ -52,8 +53,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
+import jakarta.annotation.Nullable;
 import megamek.common.TargetRollModifier;
-import megamek.common.annotations.Nullable;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.campaignOptions.CampaignOption;
 import mekhq.campaign.enums.DailyReportType;
@@ -67,6 +68,7 @@ import mekhq.campaign.personnel.skills.ActionCheckResult;
 import mekhq.campaign.personnel.skills.AttributeCheck;
 import mekhq.campaign.personnel.skills.SkillCheck;
 import mekhq.campaign.personnel.skills.enums.SkillAttribute;
+import mekhq.campaign.personnel.turnoverAndRetention.Fatigue;
 
 
 /**
@@ -309,6 +311,7 @@ public class AdvancedMedicalAlternateHealing {
             boolean useEdge = campaign.getCampaignOptions().get(CampaignOption.USE_EDGE);
             useEdge = useEdge && healingSPAOptions.hasMedicalEdge() && willResolveThisCycle;
             int marginOfSuccess = getMarginOfSuccessForHealing(doctor,
+                  patient,
                   campaign,
                   modifiers,
                   miscPenalty,
@@ -332,6 +335,7 @@ public class AdvancedMedicalAlternateHealing {
      * Performs the healing roll for a doctor and returns its margin of success.
      *
      * @param doctor      the person performing the surgery check
+     * @param patient     the person being healed
      * @param campaign    the {@link Campaign} context
      * @param modifiers   the list of modifiers applied to the surgery roll
      * @param miscPenalty the combined penalty for this healing attempt
@@ -343,10 +347,11 @@ public class AdvancedMedicalAlternateHealing {
      * @author Illiani
      * @since 0.50.10
      */
-    private static int getMarginOfSuccessForHealing(Person doctor, Campaign campaign,
+    private static int getMarginOfSuccessForHealing(Person doctor, Person patient, Campaign campaign,
           List<TargetRollModifier> modifiers, int miscPenalty, boolean useEdge, boolean isUnassistedHealing,
           boolean isUseKinderHealing) {
         ActionCheckResult actionCheckResult = getActionCheckResult(doctor,
+              patient,
               campaign,
               modifiers,
               miscPenalty,
@@ -357,7 +362,7 @@ public class AdvancedMedicalAlternateHealing {
         return actionCheckResult.getMarginOfSuccess();
     }
 
-    private static ActionCheckResult getActionCheckResult(Person doctor, Campaign campaign,
+    private static ActionCheckResult getActionCheckResult(Person doctor, Person patient, Campaign campaign,
           List<TargetRollModifier> modifiers, int miscPenalty, boolean useEdge, boolean isUnassistedHealing,
           boolean isUseKinderHealing) {
         ActionCheckResult actionCheckResult;
@@ -365,6 +370,7 @@ public class AdvancedMedicalAlternateHealing {
             actionCheckResult = performBodyAttributeCheck(doctor, modifiers, miscPenalty, useEdge, isUseKinderHealing);
         } else {
             actionCheckResult = performSurgerySkillCheck(doctor,
+                  patient,
                   campaign,
                   modifiers,
                   miscPenalty,
@@ -425,22 +431,23 @@ public class AdvancedMedicalAlternateHealing {
      * campaign options and {@code useEdge} is {@code true}, a second roll is made and its result replaces the
      * original.</p>
      */
-    private static ActionCheckResult performSurgerySkillCheck(Person doctor, Campaign campaign,
+    private static ActionCheckResult performSurgerySkillCheck(Person doctor, Person patient, Campaign campaign,
           List<TargetRollModifier> modifiers, int miscPenalty, boolean useEdge, boolean isUseKinderHealing) {
         ActionCheckResult actionCheckResult;
         SkillCheck skillCheck = doctor.checkSkill(S_SURGERY, campaign)
                                       .withMiscModifier(miscPenalty)
                                       .withExternalModifiers(modifiers);
-        String resourceBundleKey = "AdvancedMedicalAlternateHealing.assistedHealing.normal";
-        String reportText = getTextAt(RESOURCE_BUNDLE, resourceBundleKey);
+        String patientName = patient.getHyperlinkedFullTitle();
+        String reportText = getFormattedTextAt(RESOURCE_BUNDLE, "AdvancedMedicalAlternateHealing.assistedHealing.normal",
+              patientName);
         actionCheckResult = skillCheck.resolve(false, reportText);
 
         // Edge
         if (isPermanentOutcome(actionCheckResult, isUseKinderHealing) && useEdge && doctor.getCurrentEdge() > 0) {
             // manually update edge because if we pass useEdge == true, the doctor will get one free roll
             doctor.spendEdge();
-            actionCheckResult = skillCheck.resolve(false, getTextAt(RESOURCE_BUNDLE,
-                  "AdvancedMedicalAlternateHealing.assistedHealing.edge"));
+            actionCheckResult = skillCheck.resolve(false, getFormattedTextAt(RESOURCE_BUNDLE,
+                  "AdvancedMedicalAlternateHealing.assistedHealing.edge", patientName));
         }
         return actionCheckResult;
     }
@@ -515,8 +522,12 @@ public class AdvancedMedicalAlternateHealing {
             patient.removeInjury(injury, today);
 
             if (patient.getInjuries().isEmpty()) {
-                if (!(null == patient.getDoctorId()) && patient.getPrisonerStatus().isFreeOrBondsman()) {
-                    MedicalLogger.dismissedFromInfirmary(patient, campaign);
+                if (!(null == patient.getDoctorId())) {
+                    if (patient.getPrisonerStatus().isFreeOrBondsman()) {
+                        MedicalLogger.dismissedFromInfirmary(patient, campaign);
+                    } else {
+                        MedicalLogger.prisonerDismissedFromInfirmary(patient, campaign);
+                    }
                 }
                 // AAM doesn't use 'days to wait for healing' so we just set it to '1.' If the player toggles AAM off,
                 // they will get a free day's worth of healing the next day, but that's not a huge issue.
@@ -531,9 +542,11 @@ public class AdvancedMedicalAlternateHealing {
         }
 
         // The following effects are universal and can apply even if the original injury is healed
+        int fatigueDamage = 0;
         if (campaign.getCampaignOptions().get(CampaignOption.USE_FATIGUE)) {
             int fatigueRate = campaign.getCampaignOptions().get(CampaignOption.FATIGUE_RATE);
-            patient.changeFatigue(healingEffect.getFatigueDamage() * fatigueRate);
+            fatigueDamage = healingEffect.getFatigueDamage() * fatigueRate;
+            patient.changeFatigue(fatigueDamage);
         }
 
         if (healingEffect.isHasComplication()) {
@@ -541,6 +554,11 @@ public class AdvancedMedicalAlternateHealing {
             if (patient.getTotalInjurySeverity() >= DEATH) {
                 patient.changeStatus(campaign, today, MEDICAL_COMPLICATIONS);
             }
+        }
+
+        // Process after any complication is added, so the injured patient isn't sent on leave
+        if (fatigueDamage > 0 && !patient.getStatus().isDead()) {
+            Fatigue.processFatigueActions(campaign, patient);
         }
 
         return healingEffect;

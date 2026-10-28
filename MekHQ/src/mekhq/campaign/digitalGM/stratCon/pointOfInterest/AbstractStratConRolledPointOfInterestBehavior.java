@@ -38,7 +38,7 @@ import static mekhq.campaign.enums.DailyReportType.GENERAL;
 import static mekhq.utilities.MHQInternationalization.getFormattedTextAt;
 import static mekhq.utilities.MHQInternationalization.getTextAt;
 
-import megamek.common.annotations.Nullable;
+import jakarta.annotation.Nullable;
 import megamek.logging.MMLogger;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.digitalGM.stratCon.StratConContractMechanics;
@@ -308,7 +308,7 @@ public abstract class AbstractStratConRolledPointOfInterestBehavior implements I
         } else {
             Formation formation = campaign.getPlayerForce().getFormation(formationId);
             int unitType = (formation == null) ? MEK : formation.getPrimaryUnitType(campaign);
-            template = StratConScenarioFactory.getRandomScenario(unitType, true, false);
+            template = StratConRulesManager.getRandomScenarioForTrack(track, unitType, true, false);
         }
 
         // Set up with the deploying formation as its seed, as every other StratCon scenario is: the opposition is

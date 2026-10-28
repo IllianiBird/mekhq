@@ -72,25 +72,21 @@ import javax.swing.JPopupMenu;
 import javax.swing.JSplitPane;
 import javax.swing.JTable;
 
+import jakarta.annotation.Nullable;
 import megamek.client.ui.dialogs.UnitEditorDialog;
 import megamek.client.ui.dialogs.abstractDialogs.BVDisplayDialog;
 import megamek.client.ui.dialogs.iconChooser.CamoChooserDialog;
 import megamek.codeUtilities.MathUtility;
-import megamek.common.annotations.Nullable;
 import megamek.common.enums.SkillLevel;
 import megamek.common.equipment.AmmoType;
 import megamek.common.equipment.GunEmplacement;
 import megamek.common.icons.Camouflage;
 import megamek.common.loaders.BLKFile;
-import megamek.common.loaders.EntityLoadingException;
 import megamek.common.loaders.EntitySavingException;
-import megamek.common.loaders.MekFileParser;
-import megamek.common.loaders.MekSummary;
 import megamek.common.loaders.MekSummaryCache;
 import megamek.common.units.Aero;
 import megamek.common.units.Entity;
 import megamek.common.units.EntityWeightClass;
-import megamek.common.units.IBomber;
 import megamek.common.units.Infantry;
 import megamek.common.units.Mek;
 import megamek.common.units.ProtoMek;
@@ -108,18 +104,21 @@ import mekhq.campaign.events.units.UnitChangedEvent;
 import mekhq.campaign.events.units.UnitLogEvent;
 import mekhq.campaign.finances.Money;
 import mekhq.campaign.finances.enums.TransactionType;
-import mekhq.campaign.mission.rentals.FacilityRentals;
 import mekhq.campaign.mission.scenarios.Scenario;
 import mekhq.campaign.parts.Part;
 import mekhq.campaign.parts.Refit;
+import mekhq.campaign.parts.RefitPartOrders;
 import mekhq.campaign.parts.enums.PartQuality;
 import mekhq.campaign.parts.equipment.AmmoBin;
 import mekhq.campaign.personnel.Person;
 import mekhq.campaign.personnel.enums.PersonnelRole;
 import mekhq.campaign.personnel.quartermaster.ArmorKitCatalog;
 import mekhq.campaign.personnel.quartermaster.EquipmentKitCatalog;
+import mekhq.campaign.unit.BombUnloader;
+import mekhq.campaign.unit.EditedDamage;
 import mekhq.campaign.unit.Maintenance;
 import mekhq.campaign.unit.Unit;
+import mekhq.campaign.unit.UnitSiteChange;
 import mekhq.campaign.unit.actions.ActivateUnitAction;
 import mekhq.campaign.unit.actions.CancelMothballUnitAction;
 import mekhq.campaign.unit.actions.HirePersonnelUnitAction;
@@ -134,7 +133,6 @@ import mekhq.gui.HangarTab;
 import mekhq.gui.baseComponents.immersiveDialogs.ImmersiveDialogSimple;
 import mekhq.gui.control.EditUnitLogControl.UnitLogType;
 import mekhq.gui.dialog.BombsDialog;
-import mekhq.gui.dialog.ChooseRefitDialog;
 import mekhq.gui.dialog.EditUnitLogDialog;
 import mekhq.gui.dialog.LargeCraftAmmoSwapDialog;
 import mekhq.gui.dialog.MarkdownEditorDialog;
@@ -199,6 +197,7 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
     public static final String COMMAND_MAINTENANCE_REPORT = "MAINTENANCE_REPORT";
     public static final String COMMAND_QUIRKS = "QUIRKS";
     public static final String COMMAND_BOMBS = "BOMBS";
+    public static final String COMMAND_UNLOAD_ALL_BOMBS = "UNLOAD_ALL_BOMBS";
     public static final String COMMAND_SUPPLY_COST = "SUPPLY_COST";
     public static final String COMMAND_PARTS_REPORT = "PARTS_REPORT";
     public static final String COMMAND_TAG_CUSTOM = "TAG_CUSTOM";
@@ -208,6 +207,7 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
     public static final String COMMAND_CANCEL_CUSTOMIZE = "CANCEL_CUSTOMIZE";
     public static final String COMMAND_REFIT_GM_COMPLETE = "REFIT_GM_COMPLETE";
     public static final String COMMAND_ASSIGN_REFIT_TECH = "ASSIGN_REFIT_TECH";
+    public static final String COMMAND_FORGET_PENDING_REFIT = "FORGET_PENDING_REFIT";
     public static final String COMMAND_REFURBISH = "REFURBISH";
     public static final String COMMAND_REFIT_KIT = "REFIT_KIT";
     public static final String COMMAND_FLUFF_NAME = "FLUFF_NAME";
@@ -438,21 +438,7 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
                 return;
             }
 
-            boolean wasSiteChangeSuccessful = true;
-            Campaign campaign = gui.getCampaign();
-            if (selected >= Unit.SITE_FACILITY_MAINTENANCE &&
-                      campaign.getCampaignOptions().get(CampaignOption.RENTED_FACILITIES_COST_REPAIR_BAYS) > 0) {
-                wasSiteChangeSuccessful = FacilityRentals.processBayChangeRequest(campaign, units, selected);
-            }
-
-            if (wasSiteChangeSuccessful) {
-                for (Unit unit : units) {
-                    if (!unit.isDeployed()) {
-                        unit.setSite(selected);
-                        MekHQ.triggerEvent(new RepairStatusChangedEvent(unit));
-                    }
-                }
-            }
+            UnitSiteChange.moveToSite(gui.getCampaign(), units, selected);
         } else if (command.equals(COMMAND_SALVAGE)) {
             for (Unit unit : units) {
                 if (!unit.isDeployed()) {
@@ -612,6 +598,13 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
             gui.setSelectedTab(gui.getMekLabTab());
         } else if (command.equals(COMMAND_CANCEL_CUSTOMIZE)) {
             Stream.of(units).filter(Unit::isRefitting).forEach(unit -> unit.getRefit().cancel());
+        } else if (command.equals(COMMAND_FORGET_PENDING_REFIT)) {
+            for (Unit unit : units) {
+                if (unit.getPendingRefitModel() != null) {
+                    RefitPartOrders.forgetOrdersAheadFor(gui.getCampaign(), unit);
+                    MekHQ.triggerEvent(new UnitChangedEvent(unit));
+                }
+            }
         } else if (command.equals(COMMAND_ASSIGN_REFIT_TECH)) { // Single Unit only
             gui.assignRefitTech(selectedUnit.getRefit());
         } else if (command.equals(COMMAND_REFIT_GM_COMPLETE)) {
@@ -622,28 +615,7 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
                 gui.refitUnit(refit, false);
             }
         } else if (command.equals(COMMAND_REFIT_KIT)) { // Single Unit or Multiple of Units of the same type only
-            ChooseRefitDialog crd = new ChooseRefitDialog(gui.getFrame(), true, gui.getCampaign(), selectedUnit);
-            crd.setVisible(true);
-            if (crd.isConfirmed()) {
-                MekSummary summary = MekSummaryCache.getInstance()
-                                           .getMek(crd.getSelectedRefit().getNewEntity().getShortNameRaw());
-                if (summary != null) {
-                    for (Unit unit : units) {
-                        try {
-                            Entity refitEntity = new MekFileParser(summary.getSourceFile(),
-                                  summary.getEntryName()).getEntity();
-                            if (refitEntity != null) {
-                                Refit refit = new Refit(unit, refitEntity, crd.isCustomize(), false, false);
-                                if (refit.checkFixable() == null) {
-                                    gui.refitUnit(refit, false);
-                                }
-                            }
-                        } catch (EntityLoadingException ex) {
-                            LOGGER.error("", ex);
-                        }
-                    }
-                }
-            }
+            gui.chooseRefit(units, null);
         } else if (command.equals(COMMAND_CHANGE_HISTORY)) { // Single Unit only
             MarkdownEditorDialog tad = new MarkdownEditorDialog(gui.getFrame(),
                   true,
@@ -686,12 +658,13 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
                                            .multipliedBy(gui.getCampaign()
                                                                .getCampaignOptions()
                                                                .get(CampaignOption.CANCELLED_ORDER_REFUND_MULTIPLIER));
-                gui.getCampaign().removeUnit(u.getId());
-                gui.getCampaign().getPlayerForce().getFinances()
-                      .credit(TransactionType.EQUIPMENT_PURCHASE,
-                            gui.getCampaign().getLocalDate(),
-                            refundAmount,
-                            "refund for cancelled equipment sale");
+                if (gui.getCampaign().removeUnit(u.getId())) {
+                    gui.getCampaign().getPlayerForce().getFinances()
+                          .credit(TransactionType.EQUIPMENT_PURCHASE,
+                                gui.getCampaign().getLocalDate(),
+                                refundAmount,
+                                "refund for cancelled equipment sale");
+                }
             }
         } else if (command.equals(COMMAND_ARRIVE)) {
             for (Unit u : units) {
@@ -702,7 +675,7 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
                 new MassMothballDialog(gui.getFrame(), units, gui.getCampaign(), false).setVisible(true);
             } else {
                 Person tech = pickTechForMothballOrActivation(selectedUnit, "mothballing");
-                if (tech != null) {
+                if (tech != null || selectedUnit.isSelfMaintainedInfantry()) {
                     Campaign campaign1 = selectedUnit.getCampaign();
                     if ((!selectedUnit.getActiveCrew().isEmpty()) ||
                               (campaign1.getPlayerForce().getFormationFor(selectedUnit)) != null ||
@@ -747,9 +720,16 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
                 }
             }
         } else if (command.equals(COMMAND_BOMBS)) { // Single Unit only
-            BombsDialog dialog = new BombsDialog((IBomber) selectedUnit.getEntity(), gui.getCampaign(), gui.getFrame());
+            BombsDialog dialog = new BombsDialog(selectedUnit, gui.getCampaign(), gui.getFrame());
             dialog.setVisible(true);
             MekHQ.triggerEvent(new UnitChangedEvent(selectedUnit));
+        } else if (command.equals(COMMAND_UNLOAD_ALL_BOMBS)) {
+            for (Unit unit : units) {
+                if (BombUnloader.hasBombsToUnload(unit)) {
+                    BombUnloader.unloadAll(gui.getCampaign(), unit);
+                    MekHQ.triggerEvent(new UnitChangedEvent(unit));
+                }
+            }
         } else if (command.equals(COMMAND_QUIRKS)) { // Single Unit only
             QuirksDialog dialog = new QuirksDialog(selectedUnit.getEntity(), gui.getFrame());
             dialog.setVisible(true);
@@ -757,6 +737,7 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
         } else if (command.equals(COMMAND_EDIT_DAMAGE)) { // Single Unit only
             UnitEditorDialog med = new UnitEditorDialog(gui.getFrame(), selectedUnit.getEntity());
             med.setVisible(true);
+            EditedDamage.reinstateRestoredLocations(selectedUnit);
             selectedUnit.runDiagnostic(false);
             MekHQ.triggerEvent(new UnitChangedEvent(selectedUnit));
         } else if (command.equals(COMMAND_FLUFF_NAME)) { // Single Unit only
@@ -824,6 +805,11 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
             }
 
             for (Unit unit : units) {
+                if (unit.isSalvage()) {
+                    campaign.addReport(TECHNICAL, getFormattedTextAt(RESOURCE_BUNDLE, "maintenanceAdHoc.salvage",
+                          unit.getHyperlinkedName()));
+                    continue;
+                }
                 if (!unit.requiresMaintenance()) {
                     campaign.addReport(TECHNICAL, String.format(getText("maintenanceAdHoc.noNeed"),
                           unit.getHyperlinkedName()));
@@ -855,13 +841,15 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
                 Campaign campaign = gui.getCampaign();
                 tech = campaign.getPlayerForce().getHumanResources().getPerson(id);
                 if (!tech.getTechUnits().isEmpty()) {
+                    // Maintenance comes first each day, so the tech's own units are still kept up; the warning is
+                    // that the mothballing only gets the minutes left over
                     if (JOptionPane.YES_OPTION !=
                               JOptionPane.showConfirmDialog(gui.getFrame(),
-                                    tech.getFullName() +
-                                          " will not be able to perform maintenance on " +
-                                          tech.getTechUnits().size() +
-                                          " assigned units. Proceed?",
-                                    "Unmaintained unit warning",
+                                    getFormattedTextAt(RESOURCE_BUNDLE,
+                                          "mothballUnit.maintenanceFirst.text",
+                                          tech.getFullName(),
+                                          tech.getTechUnits().size()),
+                                    getFormattedTextAt(RESOURCE_BUNDLE, "mothballUnit.maintenanceFirst.title"),
                                     JOptionPane.YES_NO_OPTION)) {
                         tech = null;
                     }
@@ -874,6 +862,16 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
 
     private boolean isSelfCrewedButHasNoTech(Unit unit) {
         return unit.isSelfCrewed() && unit.engineerResponsible().isEmpty();
+    }
+
+    /** @return {@code true} if any of the units carries a bomb that can be unloaded */
+    private static boolean isAnyCarryingBombs(Unit[] units) {
+        for (Unit unit : units) {
+            if (BombUnloader.hasBombsToUnload(unit)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -1056,7 +1054,7 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
                         });
                         ammoMenu.add(cbMenuItem);
                         AmmoType curType = ammo.getType();
-                        for (AmmoType ammoType : Utilities.getMunitionsFor(unit.getEntity(),
+                        for (AmmoType ammoType : Utilities.getMunitionsFor(unit.getEntity(), ammo.getLauncherType(),
                               curType,
                               gui.getCampaign().getCampaignOptions().get(CampaignOption.TECH_LEVEL))) {
                             cbMenuItem = new JCheckBoxMenuItem(ammoType.getDesc());
@@ -1081,6 +1079,14 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
             if (oneSelected && unit.getEntity().isBomber()) {
                 menuItem = new JMenuItem("Select Bombs");
                 menuItem.setActionCommand(COMMAND_BOMBS);
+                menuItem.addActionListener(this);
+                popup.add(menuItem);
+            }
+
+            // Unload all bombs, from one aircraft or a whole selection
+            if (isAnyCarryingBombs(units)) {
+                menuItem = new JMenuItem(getTextAt(RESOURCE_BUNDLE, "unloadAllBombs.text"));
+                menuItem.setActionCommand(COMMAND_UNLOAD_ALL_BOMBS);
                 menuItem.addActionListener(this);
                 popup.add(menuItem);
             }
@@ -1170,7 +1176,9 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
                 popup.add(menuItem);
             }
 
-            if (oneSelected && !unit.isMothballed() && gui.getCampaign().getCampaignOptions().get(CampaignOption.USE_PEACETIME_COST)) {
+            if (oneSelected
+                      && !unit.isMothballed()
+                      && gui.getCampaign().getCampaignOptions().isChargingPeacetimeCost()) {
                 menuItem = new JMenuItem("Show Monthly Supply Cost Report");
                 menuItem.setActionCommand(COMMAND_SUPPLY_COST);
                 menuItem.addActionListener(this);
@@ -1227,6 +1235,36 @@ public class UnitTableMouseAdapter extends JPopupMenuAdapter {
                     menuItem.setActionCommand(COMMAND_CUSTOMIZE);
                     menuItem.addActionListener(this);
                     menuItem.setEnabled(allAvailable && !(unit.getEntity() instanceof GunEmplacement));
+                    menu.add(menuItem);
+                }
+
+                // The parts ordered ahead are all here, so the refit can begin without waiting for any (#7848)
+                boolean isPendingRefitReady = oneSelected
+                      && unit.isAvailable()
+                      && (unit.getPendingRefitModel() != null)
+                      && RefitPartOrders.isEverythingOrderedAheadHere(gui.getCampaign(), unit);
+                if (isPendingRefitReady) {
+                    String pendingRefitModel = unit.getPendingRefitModel();
+                    menuItem = new JMenuItem(getFormattedTextAt(RESOURCE_BUNDLE, "beginPendingRefit.text",
+                          pendingRefitModel));
+                    menuItem.setToolTipText(getFormattedTextAt(RESOURCE_BUNDLE, "beginPendingRefit.tooltip",
+                          pendingRefitModel));
+                    menuItem.addActionListener(event -> gui.beginPendingRefit(unit));
+                    menu.add(menuItem);
+                }
+
+                boolean isAnyRefitPending = false;
+                for (Unit unitInSelection : units) {
+                    if (unitInSelection.getPendingRefitModel() != null) {
+                        isAnyRefitPending = true;
+                        break;
+                    }
+                }
+                if (isAnyRefitPending) {
+                    menuItem = new JMenuItem(getTextAt(RESOURCE_BUNDLE, "forgetPendingRefit.text"));
+                    menuItem.setToolTipText(getTextAt(RESOURCE_BUNDLE, "forgetPendingRefit.tooltip"));
+                    menuItem.setActionCommand(COMMAND_FORGET_PENDING_REFIT);
+                    menuItem.addActionListener(this);
                     menu.add(menuItem);
                 }
 

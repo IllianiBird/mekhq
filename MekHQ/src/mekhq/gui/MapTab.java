@@ -46,8 +46,10 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.awt.event.HierarchyEvent;
 import java.util.List;
 import java.util.Objects;
+import java.util.Vector;
 import java.util.function.Consumer;
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
@@ -57,6 +59,7 @@ import jakarta.annotation.Nullable;
 import megamek.client.ui.util.UIUtil;
 import megamek.common.event.Subscribe;
 import megamek.common.ui.FastJScrollPane;
+import megamek.logging.MMLogger;
 import mekhq.MekHQ;
 import mekhq.campaign.AbstractLocation;
 import mekhq.campaign.JumpDriveProfile;
@@ -71,6 +74,7 @@ import mekhq.campaign.events.LocationAddedEvent;
 import mekhq.campaign.events.LocationRemovedEvent;
 import mekhq.campaign.events.NewDayEvent;
 import mekhq.campaign.events.OptionsChangedEvent;
+import mekhq.campaign.events.PlanetarySystemsChangedEvent;
 import mekhq.campaign.events.missions.MissionEvent;
 import mekhq.campaign.events.scenarios.ScenarioEvent;
 import mekhq.campaign.finances.Money;
@@ -101,6 +105,7 @@ import mekhq.utilities.MHQInternationalization;
 // FIXME: this class should not inherit from CampaignGuiTab because it is managed by NavigationTab now
 public final class MapTab extends CampaignGuiTab implements ActionListener,
     InterstellarMapPanel.RoutePlanningHandler {
+    private static final MMLogger LOGGER = MMLogger.create(MapTab.class);
     private static final String RESOURCE_BUNDLE = "mekhq.resources.CampaignGUI";
     private static final int PADDING = UIUtil.scaleForGUI(10);
     private static final Color ROUTE_STRIP_BACKGROUND = new Color(7, 16, 27);
@@ -170,6 +175,8 @@ public final class MapTab extends CampaignGuiTab implements ActionListener,
     private int inspectorDividerSize;
     private int inspectorWidth = INSPECTOR_PREFERRED_WIDTH;
     private boolean applyingLayoutState;
+    private boolean isRefreshPending;
+    private boolean isNewDayUpdatePending;
     JSuggestField suggestPlanet;
 
     //region Constructors
@@ -290,7 +297,13 @@ public final class MapTab extends CampaignGuiTab implements ActionListener,
         panMap.setCampaign(getCampaign());
         panMap.addActionListener(this);
         addHierarchyListener(event -> {
-            if ((event.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && !isShowing()) {
+            if ((event.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) == 0) {
+                return;
+            }
+            if (isShowing()) {
+                runPendingNewDayUpdate();
+                runPendingRefresh();
+            } else {
                 panMap.closeMapUtilityWindows();
             }
         });
@@ -1249,13 +1262,32 @@ public final class MapTab extends CampaignGuiTab implements ActionListener,
         lblRouteCost.setForeground(color);
     }
 
-    /*
-     * (non-Javadoc)
-     *
-     * @see mekhq.gui.CampaignGuiTab#refreshAll()
+    /**
+     * Rebuilds the dossier and route panels. While the tab is hidden the rebuild waits until the tab is shown, so
+     * advancing days with another tab open does not rebuild panels nobody can see once per day.
      */
     @Override
     public void refreshAll() {
+        if (!isShowing()) {
+            if (!isRefreshPending) {
+                LOGGER.debug("[MapTab] Refresh deferred until the tab is shown");
+            }
+            isRefreshPending = true;
+            return;
+        }
+        isRefreshPending = false;
+        refreshSystemView();
+    }
+
+    /**
+     * Runs the refresh that {@link #refreshAll()} held back while the tab was hidden, if there is one.
+     */
+    private void runPendingRefresh() {
+        if (!isRefreshPending) {
+            return;
+        }
+        LOGGER.debug("[MapTab] Running the refresh deferred while the tab was hidden");
+        isRefreshPending = false;
         refreshSystemView();
     }
 
@@ -1664,8 +1696,73 @@ public final class MapTab extends CampaignGuiTab implements ActionListener,
         PLANNED
     }
 
+    static void restoreSelectedPlanet(PlanetarySystemMapPanel panel, PlanetarySystem system,
+          @Nullable String planetId) {
+        Planet planet = planetId == null ? null : system.getPlanetById(planetId);
+        if (planet != null) {
+            panel.updatePlanetarySystem(planet);
+        } else {
+            panel.updatePlanetarySystem(system);
+        }
+    }
+
     @Subscribe
-    public void handle(NewDayEvent ev) {
+    public void handle(PlanetarySystemsChangedEvent event) {
+        if (event.getCampaign() != getCampaign()) {
+            return;
+        }
+        Planet selectedPlanet = panSystem.getSelectedPlanet();
+        String selectedPlanetId = selectedPlanet == null ? null : selectedPlanet.getId();
+        routePlanningIntent.refreshPlanetarySystems(getCampaign());
+        panMap.setJumpPath(routePlanningIntent.getJumpPath());
+        panMap.setCampaign(getCampaign());
+        PlanetarySystem system = panMap.getSelectedSystem();
+        if (system != null) {
+            restoreSelectedPlanet(panSystem, system, selectedPlanetId);
+        }
+        refreshSystemSearchFields();
+        setRouteFieldSystem(suggestRouteOrigin, routePlanningIntent.getOrigin());
+        List<PlanetarySystem> stops = routePlanningIntent.getRequestedStops();
+        if (!stops.isEmpty()) {
+            setRouteFieldSystem(suggestRouteDestination, stops.getLast());
+        }
+        refreshPlanetView();
+    }
+
+    /**
+     * Brings the map up to the new day. While the tab is hidden this waits until the tab is shown, so advancing a
+     * month with another tab open does the update once instead of thirty times.
+     */
+    @Subscribe
+    public void handle(NewDayEvent event) {
+        if (!isShowing()) {
+            if (!isNewDayUpdatePending) {
+                LOGGER.debug("[MapTab] New day update deferred until the tab is shown");
+            }
+            isNewDayUpdatePending = true;
+            return;
+        }
+        isNewDayUpdatePending = false;
+        updateForNewDay();
+    }
+
+    /**
+     * Runs the new day update that {@link #handle(NewDayEvent)} held back while the tab was hidden, if there is one.
+     */
+    private void runPendingNewDayUpdate() {
+        if (!isNewDayUpdatePending) {
+            return;
+        }
+        LOGGER.debug("[MapTab] Running the new day update deferred while the tab was hidden");
+        isNewDayUpdatePending = false;
+        updateForNewDay();
+    }
+
+    /**
+     * Redraws the map for the new date, resets an unplanned route to start from the current system, and refreshes the
+     * route strip and the system names, which can change with the date.
+     */
+    private void updateForNewDay() {
         panMap.requestStaticCartographyPreparation();
         panMap.repaint();
         if (!hasPlannedRoute()) {
@@ -1673,9 +1770,18 @@ public final class MapTab extends CampaignGuiTab implements ActionListener,
             setRouteFieldSystem(suggestRouteOrigin, routePlanningIntent.getOrigin());
         }
         updateRouteStrip();
-        suggestPlanet.setSuggestData(getCampaign().getSystemNames());
-        suggestRouteOrigin.setSuggestData(getCampaign().getSystemNames());
-        suggestRouteDestination.setSuggestData(getCampaign().getSystemNames());
+        refreshSystemSearchFields();
+    }
+
+    /**
+     * Gives the three system search fields the current system names. The names are looked up once and copied, because
+     * looking them up visits every system and each field sorts and keeps the list it is given.
+     */
+    private void refreshSystemSearchFields() {
+        Vector<String> systemNames = getCampaign().getSystemNames();
+        suggestPlanet.setSuggestData(new Vector<>(systemNames));
+        suggestRouteOrigin.setSuggestData(new Vector<>(systemNames));
+        suggestRouteDestination.setSuggestData(systemNames);
     }
 
     @Subscribe

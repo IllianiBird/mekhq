@@ -38,7 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import megamek.common.annotations.Nullable;
+import jakarta.annotation.Nullable;
 import megamek.logging.MMLogger;
 
 /**
@@ -82,6 +82,7 @@ public final class StratConPointOfInterestBehaviors {
         behaviors.put(StratConTargetIntelligenceBehavior.BEHAVIOR_ID, new StratConTargetIntelligenceBehavior());
         behaviors.put(StratConShowOfForceBehavior.BEHAVIOR_ID, new StratConShowOfForceBehavior());
         behaviors.put(StratConPirateCaptainBehavior.BEHAVIOR_ID, new StratConPirateCaptainBehavior());
+        behaviors.put(StratConEnemyEngineersBehavior.BEHAVIOR_ID, new StratConEnemyEngineersBehavior());
     }
 
     private StratConPointOfInterestBehaviors() {

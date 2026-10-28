@@ -35,9 +35,9 @@ package mekhq.campaign.parts.kfs;
 import java.io.PrintWriter;
 import java.util.StringJoiner;
 
+import jakarta.annotation.Nullable;
 import megamek.common.SimpleTechLevel;
 import megamek.common.TechAdvancement;
-import megamek.common.annotations.Nullable;
 import megamek.common.enums.AvailabilityValue;
 import megamek.common.enums.Faction;
 import megamek.common.enums.TechBase;
@@ -223,17 +223,8 @@ public class KFDriveController extends Part {
 
     @Override
     public Money getStickerPrice() {
-        if (unit != null && unit.getEntity() instanceof Jumpship) {
-            int cost = 50000000;
-            if (((Jumpship) unit.getEntity()).getDriveCoreType() == Jumpship.DRIVE_CORE_COMPACT
-                      && ((Jumpship) unit.getEntity()).hasLF()) {
-                cost *= 15;
-            } else if (((Jumpship) unit.getEntity()).hasLF()) {
-                cost *= 3;
-            } else if (((Jumpship) unit.getEntity()).getDriveCoreType() == Jumpship.DRIVE_CORE_COMPACT) {
-                cost *= 5;
-            }
-            return Money.of(cost);
+        if ((unit != null) && (unit.getEntity() instanceof Jumpship jumpship)) {
+            return KFDrivePrice.onShip(jumpship, 50_000_000.0);
         }
         return Money.of(50000000);
     }

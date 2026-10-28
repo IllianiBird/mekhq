@@ -32,24 +32,31 @@
  */
 package mekhq.gui.campaignOptions.contents;
 
+import static megamek.client.ui.WrapLayout.wordWrap;
 import static mekhq.gui.campaignOptions.CampaignOptionsUtilities.LEGACY_RULE_BEFORE_METADATA;
 import static mekhq.gui.campaignOptions.CampaignOptionsUtilities.MILESTONE_BEFORE_METADATA;
 import static mekhq.gui.campaignOptions.CampaignOptionsUtilities.createTipPanelUpdater;
 import static mekhq.gui.campaignOptions.CampaignOptionsUtilities.getImageDirectory;
 import static mekhq.gui.campaignOptions.CampaignOptionsUtilities.getMetadata;
 
+import java.awt.Component;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
 
 import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
+import megamek.Version;
 import megamek.client.ui.comboBoxes.MMComboBox;
+import megamek.client.ui.settings.SettingsFormPanel;
+import mekhq.campaign.campaignOptions.CampaignOption;
 import mekhq.campaign.finances.enums.FinancialYearDuration;
+import mekhq.campaign.finances.enums.UnitCostModel;
 import mekhq.gui.campaignOptions.CampaignOptionFlag;
 import mekhq.gui.campaignOptions.components.CampaignOptionsCheckBox;
-import megamek.client.ui.settings.SettingsFormPanel;
 import mekhq.gui.campaignOptions.components.CampaignOptionsHeaderPanel;
 import mekhq.gui.campaignOptions.components.CampaignOptionsLabel;
 import mekhq.gui.campaignOptions.components.CampaignOptionsPagePanel;
@@ -82,6 +89,12 @@ class FinancesGeneralPage {
     private MMComboBox<FinancialYearDuration> comboFinancialYearDuration;
     private JCheckBox newFinancialYearFinancesToCSVExportBox;
     private JCheckBox chkSimulateGrayMonday;
+    private JCheckBox chkUsePlanetaryCostReductions;
+    private JCheckBox chkPlanetaryCostReductionsOnContract;
+    private JCheckBox chkPlanetaryCostReductionsForMaintenance;
+    private JCheckBox chkIncreaseClanRepairCosts;
+    private JLabel lblUnitCostModel;
+    private MMComboBox<UnitCostModel> comboUnitCostModel;
 
     private JPanel pnlPayments;
     private JCheckBox payForPartsBox;
@@ -90,10 +103,20 @@ class FinancesGeneralPage {
     private JCheckBox payForSalariesBox;
     private JCheckBox payForOverheadBox;
     private JCheckBox payForMaintainBox;
+    private JCheckBox payForHotSpotsUpkeepBox;
+    private JCheckBox escalatingHotSpotsUpkeepBox;
     private JCheckBox payForTransportBox;
     private JCheckBox payForRecruitmentBox;
     private JCheckBox payForFoodBox;
     private JCheckBox payForHousingBox;
+    private JLabel lblRecruitmentTrainingCostMultiplier;
+    private JSpinner spnRecruitmentTrainingCostMultiplier;
+    private JLabel lblRecruitmentProfessionSkillCostMultiplier;
+    private JSpinner spnRecruitmentProfessionSkillCostMultiplier;
+    private JLabel lblRecruitmentUtilitySkillCostMultiplier;
+    private JSpinner spnRecruitmentUtilitySkillCostMultiplier;
+    private JLabel lblRecruitmentRoleplaySkillCostMultiplier;
+    private JSpinner spnRecruitmentRoleplaySkillCostMultiplier;
 
     private JPanel pnlSales;
     private JCheckBox sellUnitsBox;
@@ -214,6 +237,13 @@ class FinancesGeneralPage {
         payForOverheadBox.addMouseListener(createTipPanelUpdater("PayForOverheadBox"));
         payForMaintainBox = new CampaignOptionsCheckBox("PayForMaintainBox");
         payForMaintainBox.addMouseListener(createTipPanelUpdater("PayForMaintainBox"));
+        payForHotSpotsUpkeepBox = new CampaignOptionsCheckBox("PayForHotSpotsUpkeepBox",
+                getMetadata(new Version(0, 51, 1)));
+        payForHotSpotsUpkeepBox.addMouseListener(createTipPanelUpdater("PayForHotSpotsUpkeepBox"));
+        payForHotSpotsUpkeepBox.addItemListener(event -> updateHotSpotsUpkeepExclusions());
+        escalatingHotSpotsUpkeepBox = new CampaignOptionsCheckBox("EscalatingHotSpotsUpkeepBox",
+                getMetadata(new Version(0, 51, 1)));
+        escalatingHotSpotsUpkeepBox.addMouseListener(createTipPanelUpdater("EscalatingHotSpotsUpkeepBox"));
         payForTransportBox = new CampaignOptionsCheckBox("PayForTransportBox");
         payForTransportBox.addMouseListener(createTipPanelUpdater("PayForTransportBox"));
         payForRecruitmentBox = new CampaignOptionsCheckBox("PayForRecruitmentBox");
@@ -225,6 +255,41 @@ class FinancesGeneralPage {
         payForHousingBox = new CampaignOptionsCheckBox("PayForHousingBox",
                 getMetadata(LEGACY_RULE_BEFORE_METADATA, CampaignOptionFlag.IMPORTANT));
         payForHousingBox.addMouseListener(createTipPanelUpdater("PayForHousingBox"));
+        lblRecruitmentTrainingCostMultiplier = new CampaignOptionsLabel("RecruitmentTrainingCostMultiplier",
+                getMetadata(new Version(0, 51, 1)));
+        lblRecruitmentTrainingCostMultiplier
+              .addMouseListener(createTipPanelUpdater("RecruitmentTrainingCostMultiplier"));
+        spnRecruitmentTrainingCostMultiplier = new CampaignOptionsSpinner("RecruitmentTrainingCostMultiplier",
+              1.5, 0.0, 10.0, 0.1);
+        spnRecruitmentTrainingCostMultiplier
+              .addMouseListener(createTipPanelUpdater("RecruitmentTrainingCostMultiplier"));
+        lblRecruitmentProfessionSkillCostMultiplier =
+              new CampaignOptionsLabel("RecruitmentProfessionSkillCostMultiplier",
+                    getMetadata(new Version(0, 51, 1)));
+        lblRecruitmentProfessionSkillCostMultiplier
+              .addMouseListener(createTipPanelUpdater("RecruitmentProfessionSkillCostMultiplier"));
+        spnRecruitmentProfessionSkillCostMultiplier =
+              new CampaignOptionsSpinner("RecruitmentProfessionSkillCostMultiplier",
+                    CampaignOption.RECRUITMENT_PROFESSION_SKILL_COST_MULTIPLIER.defaultValue(), 0.0, 10.0, 0.1);
+        spnRecruitmentProfessionSkillCostMultiplier
+              .addMouseListener(createTipPanelUpdater("RecruitmentProfessionSkillCostMultiplier"));
+        lblRecruitmentUtilitySkillCostMultiplier = new CampaignOptionsLabel("RecruitmentUtilitySkillCostMultiplier",
+                getMetadata(new Version(0, 51, 1)));
+        lblRecruitmentUtilitySkillCostMultiplier
+              .addMouseListener(createTipPanelUpdater("RecruitmentUtilitySkillCostMultiplier"));
+        spnRecruitmentUtilitySkillCostMultiplier = new CampaignOptionsSpinner("RecruitmentUtilitySkillCostMultiplier",
+              CampaignOption.RECRUITMENT_UTILITY_SKILL_COST_MULTIPLIER.defaultValue(), 0.0, 10.0, 0.1);
+        spnRecruitmentUtilitySkillCostMultiplier
+              .addMouseListener(createTipPanelUpdater("RecruitmentUtilitySkillCostMultiplier"));
+        lblRecruitmentRoleplaySkillCostMultiplier = new CampaignOptionsLabel("RecruitmentRoleplaySkillCostMultiplier",
+                getMetadata(new Version(0, 51, 1)));
+        lblRecruitmentRoleplaySkillCostMultiplier
+              .addMouseListener(createTipPanelUpdater("RecruitmentRoleplaySkillCostMultiplier"));
+        spnRecruitmentRoleplaySkillCostMultiplier =
+              new CampaignOptionsSpinner("RecruitmentRoleplaySkillCostMultiplier",
+                    CampaignOption.RECRUITMENT_ROLEPLAY_SKILL_COST_MULTIPLIER.defaultValue(), 0.0, 10.0, 0.1);
+        spnRecruitmentRoleplaySkillCostMultiplier
+              .addMouseListener(createTipPanelUpdater("RecruitmentRoleplaySkillCostMultiplier"));
 
         // Layout the Panel
         final SettingsFormPanel panel = new SettingsFormPanel("PaymentsPanel",
@@ -237,10 +302,16 @@ class FinancesGeneralPage {
                 payForSalariesBox,
                 payForOverheadBox,
                 payForMaintainBox,
+                payForHotSpotsUpkeepBox,
+                escalatingHotSpotsUpkeepBox,
                 payForTransportBox,
                 payForRecruitmentBox,
                 payForFoodBox,
                 payForHousingBox);
+        panel.addRow(lblRecruitmentProfessionSkillCostMultiplier, spnRecruitmentProfessionSkillCostMultiplier);
+        panel.addRow(lblRecruitmentUtilitySkillCostMultiplier, spnRecruitmentUtilitySkillCostMultiplier);
+        panel.addRow(lblRecruitmentRoleplaySkillCostMultiplier, spnRecruitmentRoleplaySkillCostMultiplier);
+        panel.addRow(lblRecruitmentTrainingCostMultiplier, spnRecruitmentTrainingCostMultiplier);
 
         return panel;
     }
@@ -283,6 +354,38 @@ class FinancesGeneralPage {
         chkSimulateGrayMonday = new CampaignOptionsCheckBox("SimulateGrayMonday");
         chkSimulateGrayMonday.addMouseListener(createTipPanelUpdater("SimulateGrayMonday"));
 
+        chkUsePlanetaryCostReductions = new CampaignOptionsCheckBox("UsePlanetaryCostReductions",
+                getMetadata(new Version(0, 51, 1)));
+        chkUsePlanetaryCostReductions.addMouseListener(createTipPanelUpdater("UsePlanetaryCostReductions"));
+        chkUsePlanetaryCostReductions.addItemListener(event -> updatePlanetaryCostReductionDependents());
+        chkPlanetaryCostReductionsOnContract = new CampaignOptionsCheckBox("PlanetaryCostReductionsOnContract",
+                getMetadata(new Version(0, 51, 1)));
+        chkPlanetaryCostReductionsOnContract.addMouseListener(
+              createTipPanelUpdater("PlanetaryCostReductionsOnContract"));
+        chkPlanetaryCostReductionsForMaintenance = new CampaignOptionsCheckBox("PlanetaryCostReductionsForMaintenance",
+                getMetadata(new Version(0, 51, 1)));
+        chkPlanetaryCostReductionsForMaintenance.addMouseListener(
+              createTipPanelUpdater("PlanetaryCostReductionsForMaintenance"));
+        chkIncreaseClanRepairCosts = new CampaignOptionsCheckBox("IncreaseClanRepairCosts",
+                getMetadata(new Version(0, 51, 1)));
+        chkIncreaseClanRepairCosts.addMouseListener(createTipPanelUpdater("IncreaseClanRepairCosts"));
+        lblUnitCostModel = new CampaignOptionsLabel("UnitCostModel",
+                getMetadata(new Version(0, 51, 1), CampaignOptionFlag.IMPORTANT));
+        lblUnitCostModel.addMouseListener(createTipPanelUpdater("UnitCostModel"));
+        comboUnitCostModel = new MMComboBox<>("comboUnitCostModel", UnitCostModel.values());
+        comboUnitCostModel.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(final JList<?> list, final Object value, final int index,
+                    final boolean isSelected, final boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value instanceof UnitCostModel unitCostModel) {
+                    list.setToolTipText(wordWrap(unitCostModel.getTooltip()));
+                }
+                return this;
+            }
+        });
+        comboUnitCostModel.addMouseListener(createTipPanelUpdater("UnitCostModel"));
+
         // Layout the Panel
         final SettingsFormPanel panel = new SettingsFormPanel("GeneralOptionsPanel",
                 LABEL_COLUMN_WIDTH,
@@ -294,8 +397,13 @@ class FinancesGeneralPage {
                 usePeacetimeCostBox,
                 showPeacetimeCostBox,
                 newFinancialYearFinancesToCSVExportBox,
-                chkSimulateGrayMonday);
+                chkSimulateGrayMonday,
+                chkUsePlanetaryCostReductions,
+                chkPlanetaryCostReductionsOnContract,
+                chkPlanetaryCostReductionsForMaintenance,
+                chkIncreaseClanRepairCosts);
         panel.addRow(lblFinancialYearDuration, comboFinancialYearDuration);
+        panel.addRow(lblUnitCostModel, comboUnitCostModel);
 
         return panel;
     }
@@ -469,14 +577,25 @@ class FinancesGeneralPage {
         comboFinancialYearDuration.setSelectedItem(model.financialYearDuration);
         newFinancialYearFinancesToCSVExportBox.setSelected(model.newFinancialYearFinancesToCSVExport);
         chkSimulateGrayMonday.setSelected(model.simulateGrayMonday);
+        chkUsePlanetaryCostReductions.setSelected(model.usePlanetaryCostReductions);
+        chkPlanetaryCostReductionsOnContract.setSelected(model.planetaryCostReductionsOnContract);
+        chkPlanetaryCostReductionsForMaintenance.setSelected(model.planetaryCostReductionsForMaintenance);
+        chkIncreaseClanRepairCosts.setSelected(model.increaseClanRepairCosts);
+        comboUnitCostModel.setSelectedItem(model.unitCostModel);
         payForPartsBox.setSelected(model.payForParts);
         payForRepairsBox.setSelected(model.payForRepairs);
         payForUnitsBox.setSelected(model.payForUnits);
         payForSalariesBox.setSelected(model.payForSalaries);
         payForOverheadBox.setSelected(model.payForOverhead);
         payForMaintainBox.setSelected(model.payForMaintain);
+        payForHotSpotsUpkeepBox.setSelected(model.payForHotSpotsUpkeep);
+        escalatingHotSpotsUpkeepBox.setSelected(model.escalatingHotSpotsUpkeep);
         payForTransportBox.setSelected(model.payForTransport);
         payForRecruitmentBox.setSelected(model.payForRecruitment);
+        spnRecruitmentTrainingCostMultiplier.setValue(model.recruitmentTrainingCostMultiplier);
+        spnRecruitmentProfessionSkillCostMultiplier.setValue(model.recruitmentProfessionSkillCostMultiplier);
+        spnRecruitmentUtilitySkillCostMultiplier.setValue(model.recruitmentUtilitySkillCostMultiplier);
+        spnRecruitmentRoleplaySkillCostMultiplier.setValue(model.recruitmentRoleplaySkillCostMultiplier);
         payForFoodBox.setSelected(model.payForFood);
         payForHousingBox.setSelected(model.payForHousing);
         sellUnitsBox.setSelected(model.sellUnits);
@@ -492,6 +611,44 @@ class FinancesGeneralPage {
         spnRentedFacilitiesCostKitchens.setValue(model.rentedFacilitiesCostKitchens);
         spnRentedFacilitiesCostHoldingCells.setValue(model.rentedFacilitiesCostHoldingCells);
         spnRentedFacilitiesCostRepairBays.setValue(model.rentedFacilitiesCostRepairBays);
+
+        updateHotSpotsUpkeepExclusions();
+        updatePlanetaryCostReductionDependents();
+    }
+
+    /**
+     * The on-contract and maintenance planetary cost reduction options only matter while planetary cost reductions are
+     * enabled, so they are disabled otherwise.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    private void updatePlanetaryCostReductionDependents() {
+        boolean isUsePlanetaryCostReductions = chkUsePlanetaryCostReductions.isSelected();
+        chkPlanetaryCostReductionsOnContract.setEnabled(isUsePlanetaryCostReductions);
+        chkPlanetaryCostReductionsForMaintenance.setEnabled(isUsePlanetaryCostReductions);
+    }
+
+    /**
+     * Hot Spots upkeep replaces maintenance, peacetime operating costs, and overhead. While it is selected, those
+     * options are cleared and disabled so they can't be combined with it.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    private void updateHotSpotsUpkeepExclusions() {
+        boolean isPayForHotSpotsUpkeep = payForHotSpotsUpkeepBox.isSelected();
+        JCheckBox[] excludedBoxes = { payForMaintainBox, payForOverheadBox, usePeacetimeCostBox,
+                                      showPeacetimeCostBox };
+
+        for (JCheckBox excludedBox : excludedBoxes) {
+            if (isPayForHotSpotsUpkeep) {
+                excludedBox.setSelected(false);
+            }
+            excludedBox.setEnabled(!isPayForHotSpotsUpkeep);
+        }
+
+        escalatingHotSpotsUpkeepBox.setEnabled(isPayForHotSpotsUpkeep);
     }
 
     /**
@@ -513,14 +670,26 @@ class FinancesGeneralPage {
         model.financialYearDuration = comboFinancialYearDuration.getSelectedItem();
         model.newFinancialYearFinancesToCSVExport = newFinancialYearFinancesToCSVExportBox.isSelected();
         model.simulateGrayMonday = chkSimulateGrayMonday.isSelected();
+        model.usePlanetaryCostReductions = chkUsePlanetaryCostReductions.isSelected();
+        model.planetaryCostReductionsOnContract = chkPlanetaryCostReductionsOnContract.isSelected();
+        model.planetaryCostReductionsForMaintenance = chkPlanetaryCostReductionsForMaintenance.isSelected();
+        model.increaseClanRepairCosts = chkIncreaseClanRepairCosts.isSelected();
+        model.unitCostModel = comboUnitCostModel.getSelectedItem();
         model.payForParts = payForPartsBox.isSelected();
         model.payForRepairs = payForRepairsBox.isSelected();
         model.payForUnits = payForUnitsBox.isSelected();
         model.payForSalaries = payForSalariesBox.isSelected();
         model.payForOverhead = payForOverheadBox.isSelected();
         model.payForMaintain = payForMaintainBox.isSelected();
+        model.payForHotSpotsUpkeep = payForHotSpotsUpkeepBox.isSelected();
+        model.escalatingHotSpotsUpkeep = escalatingHotSpotsUpkeepBox.isSelected();
         model.payForTransport = payForTransportBox.isSelected();
         model.payForRecruitment = payForRecruitmentBox.isSelected();
+        model.recruitmentTrainingCostMultiplier = (double) spnRecruitmentTrainingCostMultiplier.getValue();
+        model.recruitmentProfessionSkillCostMultiplier =
+              (double) spnRecruitmentProfessionSkillCostMultiplier.getValue();
+        model.recruitmentUtilitySkillCostMultiplier = (double) spnRecruitmentUtilitySkillCostMultiplier.getValue();
+        model.recruitmentRoleplaySkillCostMultiplier = (double) spnRecruitmentRoleplaySkillCostMultiplier.getValue();
         model.payForFood = payForFoodBox.isSelected();
         model.payForHousing = payForHousingBox.isSelected();
         model.sellUnits = sellUnitsBox.isSelected();

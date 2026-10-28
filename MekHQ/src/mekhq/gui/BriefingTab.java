@@ -57,13 +57,13 @@ import javax.swing.*;
 import javax.swing.table.TableColumn;
 import javax.swing.table.TableRowSorter;
 
+import jakarta.annotation.Nullable;
 import megamek.client.bot.princess.BehaviorSettings;
 import megamek.client.bot.princess.PrincessException;
 import megamek.client.generator.ReconfigurationParameters;
 import megamek.client.generator.TeamLoadOutGenerator;
 import megamek.client.ui.comboBoxes.MMComboBox;
 import megamek.codeUtilities.ObjectUtility;
-import megamek.common.annotations.Nullable;
 import megamek.common.containers.MunitionTree;
 import megamek.common.event.Subscribe;
 import megamek.common.game.Game;
@@ -178,7 +178,7 @@ public final class BriefingTab extends CampaignGuiTab {
 
     private static final MMLogger logger = MMLogger.create(BriefingTab.class);
 
-    private enum ScenarioQueueFilter {
+    enum ScenarioQueueFilter {
         ALL("briefingTab.scenarioFilter.all"),
         ALL_ACTIVE("briefingTab.scenarioFilter.allActive"),
         PRIORITY("briefingTab.scenarioFilter.priority"),
@@ -590,11 +590,60 @@ public final class BriefingTab extends CampaignGuiTab {
      * so refreshing its data preserves the player's chosen sort order.
      */
     static TableRowSorter<ScenarioTableModel> createScenarioSorter(ScenarioTableModel model) {
-        TableRowSorter<ScenarioTableModel> sorter = new TableRowSorter<>(model);
+        TableRowSorter<ScenarioTableModel> sorter = new ScenarioRowSorter(model);
         sorter.setComparator(ScenarioTableModel.COL_NAME, new NaturalOrderComparator());
         sorter.setComparator(ScenarioTableModel.COL_DATE, Comparator.<ScenarioTableModel.DisplayDate>naturalOrder());
         sorter.setSortKeys(List.of(new RowSorter.SortKey(ScenarioTableModel.COL_DATE, SortOrder.DESCENDING)));
         return sorter;
+    }
+
+    /**
+     * Sorts the date column by each scenario's {@link LocalDate} rather than re-parsing the displayed text, which
+     * depends on the user's display date format and silently mis-sorts when that format doesn't round-trip.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    private static class ScenarioRowSorter extends TableRowSorter<ScenarioTableModel> {
+        ScenarioRowSorter(ScenarioTableModel model) {
+            super(model);
+            ModelWrapper<ScenarioTableModel, Integer> displayWrapper = getModelWrapper();
+            setModelWrapper(new ModelWrapper<>() {
+                @Override
+                public ScenarioTableModel getModel() {
+                    return displayWrapper.getModel();
+                }
+
+                @Override
+                public int getColumnCount() {
+                    return displayWrapper.getColumnCount();
+                }
+
+                @Override
+                public int getRowCount() {
+                    return displayWrapper.getRowCount();
+                }
+
+                @Override
+                public Object getValueAt(int row, int column) {
+                    if (column == ScenarioTableModel.COL_DATE) {
+                        Scenario scenario = model.getScenario(row);
+                        return (scenario == null) ? null : scenario.getDate();
+                    }
+                    return displayWrapper.getValueAt(row, column);
+                }
+
+                @Override
+                public String getStringValueAt(int row, int column) {
+                    return displayWrapper.getStringValueAt(row, column);
+                }
+
+                @Override
+                public Integer getIdentifier(int row) {
+                    return displayWrapper.getIdentifier(row);
+                }
+            });
+        }
     }
 
     private MMComboBox<ScenarioQueueFilter> createScenarioFilterCombo(String name, ScenarioQueueFilter[] filters) {
@@ -1077,7 +1126,7 @@ public final class BriefingTab extends CampaignGuiTab {
                   scenario.getName());
             return false;
         }
-        if (!mission.canSalvage()) {
+        if (!salvageSystem.getSalvage().canRecoverSalvage(mission)) {
             logger.debug("[Salvage] Skipping the salvage planner for {}: {} has no salvage rights",
                   scenario.getName(), mission.getName());
             return false;
@@ -1832,9 +1881,15 @@ public final class BriefingTab extends CampaignGuiTab {
             }
         }
 
-        if (!chosen.isEmpty()) {
-            getCampaignGui().getApplication().joinGame(scenario, chosen);
+        if (chosen.isEmpty()) {
+            return;
         }
+
+        if (handleSalvageAssignments(scenario)) {
+            return;
+        }
+
+        getCampaignGui().getApplication().joinGame(scenario, chosen);
     }
 
     private void deployListFile() {
@@ -2080,6 +2135,12 @@ public final class BriefingTab extends CampaignGuiTab {
     }
 
     public void refreshLanceAssignments() {
+        // Walks combat teams and their formations, which a bulk generation builds off the EDT; the
+        // OrganizationChangedEvent fired when it completes reschedules this refresh.
+        if (getCampaign().isBulkGenerationInProgress()) {
+            return;
+        }
+
         panLanceAssignment.refresh();
         refreshSelectedScenarioActions(getSelectedScenario());
         refreshAssignmentsTabAvailability();
@@ -2124,6 +2185,12 @@ public final class BriefingTab extends CampaignGuiTab {
     }
 
     public void refreshScenarioTableData() {
+        // Reads scenario force assignments, which a bulk generation can be rearranging off the EDT; the
+        // OrganizationChangedEvent fired when it completes reschedules this refresh.
+        if (getCampaign().isBulkGenerationInProgress()) {
+            return;
+        }
+
         int scenarioSelection = getSelectedScenarioId(scenarioTable, scenarioModel);
         ScenarioQueueFilter selectedFilter = getSelectedScenarioFilter(scenarioFilter,
               ScenarioQueueFilter.ALL);
@@ -2164,6 +2231,7 @@ public final class BriefingTab extends CampaignGuiTab {
      *
      * <ol>
      *   <li>Select the parent mission in the mission combo box (if available)</li>
+     *   <li>Keep the selected filter if it includes the scenario, otherwise switch to Active or Resolved</li>
      *   <li>Select the scenario in the scenario table (if the table contains rows)</li>
      *   <li>Scroll the scenario table to make the selected scenario visible</li>
      *   <li>Update the selectedScenario tracking variable</li>
@@ -2210,13 +2278,12 @@ public final class BriefingTab extends CampaignGuiTab {
             if (missionInCombo) {
                 comboMission.setSelectedItem(targetMission);
 
-                if ((targetScenario != null) && targetScenario.getStatus().isCurrent()) {
-                    scenarioFilter.setSelectedItem(ScenarioQueueFilter.ALL_ACTIVE);
-                    if (selectScenarioInTable(scenarioTable, scenarioModel, targetId)) {
-                        selectedScenario = targetId;
-                    }
+                if (selectScenarioInTable(scenarioTable, scenarioModel, targetId)) {
+                    selectedScenario = targetId;
                 } else {
-                    scenarioFilter.setSelectedItem(ScenarioQueueFilter.ALL_RESOLVED);
+                    scenarioFilter.setSelectedItem(
+                          ((targetScenario != null) && targetScenario.getStatus().isCurrent()) ?
+                                ScenarioQueueFilter.ALL_ACTIVE : ScenarioQueueFilter.ALL_RESOLVED);
                     if (selectScenarioInTable(scenarioTable, scenarioModel, targetId)) {
                         selectedScenario = targetId;
                     }

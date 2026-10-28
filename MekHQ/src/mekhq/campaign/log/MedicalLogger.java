@@ -82,6 +82,11 @@ public class MedicalLogger {
         person.addMedicalLogEntry(medicalLogEntry);
     }
 
+    public static void contractedDisease(Person person, LocalDate date, String diseaseName) {
+        String message = logEntriesResourceMap.getString("contractedDisease.text");
+        person.addMedicalLogEntry(new MedicalLogEntry(date, MessageFormat.format(message, diseaseName)));
+    }
+
     public static void successfulSurgery(Person person, LocalDate date, String surgeryName) {
         String message = String.format(logEntriesResourceMap.getString("surgery.text"), surgeryName);
         MedicalLogEntry medicalLogEntry = new MedicalLogEntry(date,
@@ -233,6 +238,22 @@ public class MedicalLogger {
     public static void dismissedFromInfirmary(Person person, Campaign campaign) {
         String message = person.getHyperlinkedName() + " " +
                                logEntriesResourceMap.getString("dismissedFromInfirmary.text").toLowerCase();
+        campaign.addReport(MEDICAL, message);
+    }
+
+    /**
+     * Posts a daily report message noting that a prisoner has been released from the infirmary back into general
+     * population.
+     *
+     * @param person   the prisoner being released
+     * @param campaign the current campaign
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public static void prisonerDismissedFromInfirmary(Person person, Campaign campaign) {
+        String message = MessageFormat.format(logEntriesResourceMap.getString("prisonerDismissedFromInfirmary.text"),
+              person.getHyperlinkedName());
         campaign.addReport(MEDICAL, message);
     }
 

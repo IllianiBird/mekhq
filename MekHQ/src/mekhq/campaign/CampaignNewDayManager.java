@@ -123,6 +123,7 @@ import mekhq.campaign.events.persons.PersonChangedEvent;
 import mekhq.campaign.finances.Finances;
 import mekhq.campaign.finances.Money;
 import mekhq.campaign.finances.enums.TransactionType;
+import mekhq.campaign.force.CombatTeam;
 import mekhq.campaign.force.Formation;
 import mekhq.campaign.location.IPlace;
 import mekhq.campaign.location.LocationNewDayUtil;
@@ -134,6 +135,7 @@ import mekhq.campaign.mission.contract.contractData.EnemyData;
 import mekhq.campaign.mission.contract.contractGeneration.ChaosContractMarketAvailability;
 import mekhq.campaign.mission.contract.utilities.ContractRepairLocation;
 import mekhq.campaign.mission.contract.utilities.ContractScore;
+import mekhq.campaign.mission.contract.utilities.EmployerLostPlanet;
 import mekhq.campaign.mission.contract.utilities.MHQMorale;
 import mekhq.campaign.mission.rentals.ContractRentalType;
 import mekhq.campaign.mission.rentals.FacilityRentals;
@@ -851,9 +853,9 @@ public class CampaignNewDayManager {
      * Updates the status of whether field kitchens are operating within their required capacity.
      *
      * <p>If fatigue is enabled in the campaign options, campaign method calculates the total available
-     * field kitchen capacity and the required field kitchen usage, then updates the {@code fieldKitchenWithinCapacity}
-     * flag to reflect whether the capacity meets the demand. If fatigue is disabled, the capacity is automatically set
-     * to {@code false}.</p>
+     * field kitchen capacity (including any kitchens rented for active contracts) and the required field kitchen
+     * usage, then updates the {@code fieldKitchenWithinCapacity} flag to reflect whether the capacity meets the demand.
+     * If fatigue is disabled, the capacity is automatically set to {@code false}.</p>
      */
     private void updateFieldKitchenCapacity() {
         if (campaignOptions.get(CampaignOption.USE_FATIGUE)) {
@@ -861,6 +863,8 @@ public class CampaignNewDayManager {
                   checkFieldKitchenCapacity(campaign.getPlayerForce().getFormation(Formation.FORMATION_ORIGIN)
                                                   .getAllUnitsAsUnits(campaign.getPlayerForce().getHangar(),
                                                         false), campaignOptions.get(CampaignOption.FIELD_KITCHEN_CAPACITY));
+            fieldKitchenCapacity += FacilityRentals.getCapacityIncreaseFromRentals(campaign.getActiveContracts(),
+                  ContractRentalType.KITCHENS);
             int fieldKitchenUsage = checkFieldKitchenUsage(campaign.getPlayerForce()
                                                                  .getHumanResources()
                                                                  .getActivePersonnel(false, false),
@@ -1246,6 +1250,13 @@ public class CampaignNewDayManager {
      * month, and processes ATB scenarios.
      */
     private void processNewDayATB() {
+        // Before anything else touches the contracts: an employer losing its planet today resolves the contract's
+        // active scenarios and may end or regenerate the contract.
+        EmployerLostPlanet.processNewDay(campaign);
+
+        // Combat teams whose contract has ended move to an active one before anything reads their assignments
+        CombatTeam.assignInactiveTeamsToActiveContract(campaign);
+
         if (today.getDayOfWeek() == DayOfWeek.MONDAY) {
             processTrainingCombatTeams(campaign);
         }
@@ -1343,7 +1354,7 @@ public class CampaignNewDayManager {
                                                            campaignOptions.get(CampaignOption.REGARD_MULTIPLIER));
 
                         for (String report : reports) {
-                            campaign.addReport(GENERAL, report);
+                            campaign.addReport(POLITICS, report);
                         }
                     }
                 }
@@ -1556,19 +1567,22 @@ public class CampaignNewDayManager {
      * @since 0.50.07
      */
     private void performFactionStandingChecks(boolean isFirstOfMonth, boolean isNewYear) {
-        String campaignFactionCode = faction.getShortName();
-        if (isNewYear && campaignFactionCode.equals(MERCENARY_FACTION_CODE)) {
+        if (isNewYear && faction.getShortName().equals(MERCENARY_FACTION_CODE)) {
             campaign.checkForNewMercenaryOrganizationStartUp(false, false);
         }
 
+        // Ultimatums have their own option, so they can be used without Faction Standing
+        if (campaignOptions.get(CampaignOption.USE_FACTION_STANDING_ULTIMATUMS)
+                  && FactionStandingUltimatum.processUltimatum(today, campaign,
+              campaign.getFactionStandingUltimatumsLibrary())) {
+            // The ultimatum may have moved the campaign to another faction. Refresh the cached faction so the rest
+            // of today's checks act for the new faction, not the one the campaign just left.
+            faction = campaign.getPlayerForce().getFaction();
+        }
+        String campaignFactionCode = faction.getShortName();
+
         if (!campaignOptions.get(CampaignOption.TRACK_FACTION_STANDING)) {
             return;
-        }
-
-        if (FactionStandingUltimatum.checkUltimatumForDate(today,
-              campaignFactionCode,
-              campaign.getFactionStandingUltimatumsLibrary())) {
-            new FactionStandingUltimatum(today, campaign, campaign.getFactionStandingUltimatumsLibrary());
         }
 
         if (isFirstOfMonth) {
@@ -1579,7 +1593,7 @@ public class CampaignNewDayManager {
             campaign.addReport(POLITICS, report);
         }
 
-        List<AbstractContract> activeMissions = campaign.getContractHistoryData().getCompleted();
+        List<AbstractContract> activeMissions = campaign.getContractHistoryData().getActiveAndStarted(today);
         boolean isInTransit = !updatedLocation.isOnPlanet();
         Factions factions = Factions.getInstance();
 
@@ -2021,7 +2035,7 @@ public class CampaignNewDayManager {
                     .resolve(true, getTextAt(RESOURCE_BUNDLE, "discontinuationSyndrome.check"));
         campaign.addReport(SKILL_CHECKS, attributeCheckResult.getReport());
 
-        boolean failedWillpowerCheck = attributeCheckResult.isSuccess();
+        boolean failedWillpowerCheck = !attributeCheckResult.isSuccess();
         person.processDiscontinuationSyndrome(campaign,
               isUseAdvancedMedical,
               isUseAltAdvancedMedical,
@@ -2029,6 +2043,10 @@ public class CampaignNewDayManager {
               fatigueRate,
               true,
               failedWillpowerCheck);
+
+        if (isUseFatigue && failedWillpowerCheck) {
+            Fatigue.processFatigueActions(campaign, person);
+        }
     }
 
     /**
@@ -2217,8 +2235,11 @@ public class CampaignNewDayManager {
                 // Only push the dates back once the start has actually slipped past us. Re-dating every day would
                 // make the contract recede: the estimate does not shrink while the fleet sits recharging at a jump
                 // point, so "today + remaining journey" moves a day further out for each day spent recharging.
+                // A contract whose outcome is already decided (e.g. cancelled when its employer lost the planet) is
+                // left on the dates it was ended on.
                 LocalDate startDate = contract.getStartDate();
-                if ((startDate != null) && !today.isBefore(startDate)) {
+                if ((startDate != null) && !today.isBefore(startDate)
+                          && (contract.getMandatedCompletionStatus() == null)) {
                     int remainingJourneyDays = ContractUtilities.getTravelDays(campaign,
                           contract,
                           updatedLocation,
@@ -2256,7 +2277,7 @@ public class CampaignNewDayManager {
                             continue;
                         }
 
-                        processIgnoredDynamicScenario(scenario.getId(), campaignState);
+                        processIgnoredDynamicScenario(scenario.getId(), campaignState, campaign);
 
                         ScenarioType scenarioType = scenario.getStratConScenarioType();
                         if (scenarioType.isResupply()) {

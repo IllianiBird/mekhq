@@ -37,6 +37,7 @@ import static mekhq.utilities.MHQInternationalization.getFormattedTextAt;
 
 import mekhq.MekHQ;
 import mekhq.campaign.Campaign;
+import mekhq.campaign.campaignOptions.CampaignOption;
 import mekhq.campaign.digitalGM.stratCon.StratConContractDefinition;
 import mekhq.campaign.digitalGM.stratCon.StratConContractInitializer;
 import mekhq.campaign.enums.DailyReportType;
@@ -46,8 +47,10 @@ import mekhq.campaign.finances.enums.TransactionType;
 import mekhq.campaign.mission.contract.AbstractContract;
 import mekhq.campaign.mission.contract.contractData.MissionStatus;
 import mekhq.campaign.mission.contract.contractGeneration.ContractSearchType;
+import mekhq.campaign.universe.factionStanding.FactionStandings;
 import mekhq.gui.baseComponents.immersiveDialogs.ImmersiveDialogConfirmation;
 import mekhq.gui.dialog.nagDialogs.ContractSpecialMechanicsNagDialog;
+import mekhq.gui.dialog.nagDialogs.StratConFacilityBriefingNagDialog;
 
 /**
  * Commits a {@link AbstractContract} offer from the market into an active campaign mission.
@@ -124,6 +127,20 @@ public final class ContractAcceptance {
         // up front. Monthly pay was reduced to match at generation, so the total is unchanged.
         ContractCharacteristics.paySigningBonus(campaign, contract);
 
+        // Taking up arms against the enemy costs standing with them. A covert sponsor, if any, takes the hit in the
+        // visible enemy's place, and the enemy-disposition characteristic scales it.
+        if (campaign.getCampaignOptions().get(CampaignOption.TRACK_FACTION_STANDING)) {
+            FactionStandings factionStandings = campaign.getPlayerForce().getFactionStandings();
+            double regardMultiplier = campaign.getCampaignOptions().get(CampaignOption.REGARD_MULTIPLIER)
+                                            * ContractCharacteristics.getEnemyRegardMultiplier(contract);
+            String report = factionStandings.processContractAccept(
+                  campaign.getPlayerForce().getFaction().getShortName(), contract.getStandingEnemyFaction(),
+                  campaign.getLocalDate(), regardMultiplier, contract.getLengthInMonths());
+            if (report != null) {
+                campaign.addReport(DailyReportType.POLITICS, report);
+            }
+        }
+
         // Start the contract: dates it to the projected arrival day and (per the checkboxes) mothballs and/or jumps.
         ContractAutomation.performContractStart(campaign, contract, mothball, travel);
 
@@ -132,6 +149,7 @@ public final class ContractAcceptance {
 
         // Brief the player on any special mechanics the contract brings to StratCon, now that they are set up.
         ContractSpecialMechanicsNagDialog.showIfDue(campaign, contract);
+        StratConFacilityBriefingNagDialog.showIfDue(campaign, contract);
 
         return true;
     }

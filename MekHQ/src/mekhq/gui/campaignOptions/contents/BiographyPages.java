@@ -38,8 +38,8 @@ import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.RandomOriginOptions;
-import mekhq.campaign.campaignOptions.CampaignOptions;
 import mekhq.campaign.campaignOptions.CampaignOption;
+import mekhq.campaign.campaignOptions.CampaignOptions;
 import mekhq.campaign.personnel.ranks.RankSystem;
 
 /**
@@ -236,8 +236,10 @@ public class BiographyPages {
      *                              the current UI settings, or
      *                              {@code null} to apply changes to the campaign's
      *                              options directly.
+     * @param isSaveAction          whether the target is a preset being saved rather than the live campaign; saving a
+     *                              preset leaves the campaign's rank system unchanged
      */
-    public void applyCampaignOptionsToCampaign(@Nullable CampaignOptions presetCampaignOptions) {
+    public void applyCampaignOptionsToCampaign(@Nullable CampaignOptions presetCampaignOptions, boolean isSaveAction) {
         CampaignOptions options = presetCampaignOptions;
         RandomOriginOptions originOptions;
         if (presetCampaignOptions == null) {
@@ -250,8 +252,10 @@ public class BiographyPages {
         updateModelFromCreatedControls();
         model.applyTo(options, originOptions);
 
-        // Ranks
-        rankPage.applyToCampaign();
+        // Ranks. A preset takes its rank system from the preset builder, so saving one must not change the campaign's.
+        if (!isSaveAction) {
+            rankPage.applyToCampaign();
+        }
     }
 
     private void updateCreatedControlsFromModel() {

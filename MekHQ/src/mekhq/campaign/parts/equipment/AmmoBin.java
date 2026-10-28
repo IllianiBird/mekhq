@@ -33,6 +33,7 @@
  */
 package mekhq.campaign.parts.equipment;
 
+import static mekhq.utilities.MHQInternationalization.getTextAt;
 import static mekhq.utilities.ReportingUtilities.CLOSING_SPAN_TAG;
 import static mekhq.utilities.ReportingUtilities.getNegativeColor;
 import static mekhq.utilities.ReportingUtilities.getPositiveColor;
@@ -44,9 +45,9 @@ import java.io.PrintWriter;
 import java.util.EnumSet;
 import java.util.Objects;
 
+import jakarta.annotation.Nullable;
 import megamek.common.CriticalSlot;
 import megamek.common.TechAdvancement;
-import megamek.common.annotations.Nullable;
 import megamek.common.enums.AvailabilityValue;
 import megamek.common.enums.Faction;
 import megamek.common.equipment.AmmoMounted;
@@ -60,6 +61,7 @@ import megamek.common.units.ProtoMek;
 import megamek.common.units.SmallCraft;
 import megamek.logging.MMLogger;
 import mekhq.campaign.Campaign;
+import mekhq.campaign.campaignOptions.CampaignOption;
 import mekhq.campaign.finances.Money;
 import mekhq.campaign.parts.AmmoStorage;
 import mekhq.campaign.parts.Availability;
@@ -70,17 +72,22 @@ import mekhq.campaign.personnel.Person;
 import mekhq.campaign.unit.Unit;
 import mekhq.campaign.work.IAcquisitionWork;
 import mekhq.campaign.work.IFabricatable;
+import mekhq.campaign.work.PlanetaryWorkConditions;
 import mekhq.utilities.MHQXMLUtility;
 import mekhq.utilities.ReportingUtilities;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
-import mekhq.campaign.campaignOptions.CampaignOption;
 
 /**
  * @author Jay Lawson (jaylawson39 at yahoo.com)
  */
 public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabricatable {
     private static final MMLogger LOGGER = MMLogger.create(AmmoBin.class);
+    private static final String PARTS_BUNDLE = "mekhq.resources.Parts";
+    /** Swapping out an omni pod takes half the time of reloading its magazine. */
+    private static final double OMNI_POD_TIME_MULTIPLIER = 0.5;
+    /** A one-shot weapon reloads in a quarter of the standard time (Campaign Operations p. 209). */
+    private static final double ONE_SHOT_RELOAD_TIME_MULTIPLIER = 0.25;
 
     protected int shotsNeeded;
     protected boolean oneShot;
@@ -305,6 +312,18 @@ public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabrica
         loadBin();
     }
 
+    /**
+     * A routine reload succeeds automatically, and a failed fabrication never raises the difficulty, so only an unload
+     * while salvaging can genuinely fail.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    @Override
+    protected boolean canFailItsOwnCheck() {
+        return isSalvaging();
+    }
+
     @Override
     public String succeed() {
         if (isFabricating() && !isSalvaging()) {
@@ -440,6 +459,17 @@ public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabrica
         }
 
         shotsNeeded -= shots;
+    }
+
+    /**
+     * @return the weapon this bin feeds, or {@code null} when the bin feeds no weapon or is not on a unit
+     */
+    public @Nullable EquipmentType getLauncherType() {
+        Mounted<?> mounted = getMounted();
+        if ((mounted == null) || (mounted.getLinkedBy() == null)) {
+            return null;
+        }
+        return mounted.getLinkedBy().getType();
     }
 
     /**
@@ -610,11 +640,22 @@ public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabrica
         return 15;
     }
 
+    /**
+     * The time to reload, swap or remove this bin's ammunition. An omni pod is swapped out whole in half the time, and a
+     * one-shot weapon reloads in a quarter of the time (Rearm Time Table, Campaign Operations p. 209). Salvage is not a
+     * reload, so a one-shot bin is salvaged in the full time. Harsh planetary conditions slow the work further.
+     */
     @Override
     public int getActualTime() {
-        int time = isOmniPodded()
-                         ? (int) Math.ceil(getBaseTime() * mode.timeMultiplier * 0.5)
-                         : (int) Math.ceil(getBaseTime() * mode.timeMultiplier);
+        double timeMultiplier = mode.timeMultiplier;
+        if (isOmniPodded()) {
+            timeMultiplier *= OMNI_POD_TIME_MULTIPLIER;
+        }
+        if (isOneShot() && !isSalvaging()) {
+            timeMultiplier *= ONE_SHOT_RELOAD_TIME_MULTIPLIER;
+        }
+        timeMultiplier *= PlanetaryWorkConditions.getTimeMultiplier(getCampaign(), getUnit());
+        int time = (int) Math.ceil(getBaseTime() * timeMultiplier);
         // Fabricating ammunition takes ten times as long as a routine reload.
         return time * fabricationTimeMultiplier();
     }
@@ -661,7 +702,7 @@ public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabrica
      * @return {@code true} if the warehouse has at least one shot of the required ammo type.
      */
     public boolean isAmmoAvailable() {
-        return getCampaign().getQuartermaster().getAmmoAvailable(getType()) > 0;
+        return getAmountAvailable() > 0;
     }
 
     @Override
@@ -685,9 +726,7 @@ public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabrica
                      "</b><br/>" +
                      getDetails() +
                      "<br/>" +
-                     getTimeLeft() +
-                     " minutes" +
-                     (null != getTech() ? " (scheduled) " : "") +
+                     getTimeLeftText() +
                      "</html>";
     }
 
@@ -746,6 +785,12 @@ public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabrica
         if (null == unit) {
             return "Ammo bins can only be loaded when installed on units";
         }
+        // A bin that lost its slot, as a salvaged bin whose munition no longer matched could, never fills; letting the
+        // job run would reload it every day without end
+        if (getMounted() == null) {
+            LOGGER.trace("[AmmoBin] {} on {} has no slot on the unit", getName(), unit.getName());
+            return getTextAt(PARTS_BUNDLE, "AmmoBin.noSlot");
+        }
         // Fabrication manufactures the shots for money, so it does not require any ammo in stock.
         if (!isSalvaging() && !isFabricating() && (getAmountAvailable() == 0)) {
             return "No ammo of this type is available";
@@ -753,8 +798,11 @@ public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabrica
         return null;
     }
 
+    /**
+     * @return the spare shots of this bin's ammunition in the warehouse it loads from, which may be a base's warehouse
+     */
     public int getAmountAvailable() {
-        return campaign.getQuartermaster().getAmmoAvailable(getType());
+        return campaign.getQuartermaster().getAmmoAvailable(getWarehouse(), getType());
     }
 
     public boolean isEnoughSpareAmmoAvailable() {
@@ -797,7 +845,7 @@ public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabrica
 
     @Override
     public Part getAcquisitionPart() {
-        return getNewPart();
+        return newOrderForThisBin();
     }
 
     @Override
@@ -836,7 +884,18 @@ public class AmmoBin extends EquipmentPart implements IAcquisitionWork, IFabrica
     @Override
     public IAcquisitionWork getAcquisitionWork() {
         // FIXME: is this MissingPart or AmmoStorage? Inconsistency between subtypes
-        return getNewPart();
+        return newOrderForThisBin();
+    }
+
+    /**
+     * Ammunition to buy for this bin, delivered to the warehouse the bin's unit is kept in, which may be a base's.
+     */
+    private AmmoStorage newOrderForThisBin() {
+        AmmoStorage order = getNewPart();
+        if (unit != null) {
+            order.setDeliveryUnitId(unit.getId());
+        }
+        return order;
     }
 
     @Override

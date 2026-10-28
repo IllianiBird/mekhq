@@ -43,15 +43,16 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import jakarta.annotation.Nullable;
 import jakarta.xml.bind.annotation.XmlElement;
 import jakarta.xml.bind.annotation.XmlElementWrapper;
 import jakarta.xml.bind.annotation.XmlTransient;
 import jakarta.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
-import megamek.common.annotations.Nullable;
 import megamek.logging.MMLogger;
 import mekhq.MekHQ;
 import mekhq.adapter.DateAdapter;
 import mekhq.campaign.Campaign;
+import mekhq.campaign.digitalGM.stratCon.facility.FacilityOperation;
 import mekhq.campaign.enums.CampaignTransportType;
 import mekhq.campaign.events.DeploymentChangedEvent;
 import mekhq.campaign.force.Formation;
@@ -120,6 +121,13 @@ public class StratConScenario implements IStratConDisplayable {
     private int leadershipPointsUsed;
     private Set<Integer> failedReinforcements = new HashSet<>();
     private ArrayList<Integer> primaryForceIDs = new ArrayList<>();
+    private FacilityOperation facilityOperation;
+    private boolean counterattack;
+    private StratConCoords siegeCoords;
+    private boolean siegeSortie;
+    private boolean facilitySupportRecorded;
+    private List<String> alliedFacilitySupport = new ArrayList<>();
+    private List<StratConCoords> hostileFacilitySupport = new ArrayList<>();
 
     /**
      * Add a force to the backing scenario. Do our best to add the force as a "primary" force, as defined in the
@@ -255,6 +263,19 @@ public class StratConScenario implements IStratConDisplayable {
     }
 
     public String getInfo(@Nullable Campaign campaign) {
+        return getInfo(campaign, new ArrayList<>());
+    }
+
+    /**
+     * @param campaign   the current campaign, or {@code null} to leave out the forces' Battle Value
+     * @param extraLines lines shown after the dates, such as which facilities lent support
+     *
+     * @return the scenario's summary for the StratCon map
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public String getInfo(@Nullable Campaign campaign, List<String> extraLines) {
         StringBuilder stateBuilder = new StringBuilder();
 
         if (isStrategicObjective()) {
@@ -294,6 +315,10 @@ public class StratConScenario implements IStratConDisplayable {
 
             if (returnDate != null) {
                 stateBuilder.append("<b>Return Date:</b> ").append(returnDate).append("<br/>");
+            }
+
+            for (String extraLine : extraLines) {
+                stateBuilder.append(extraLine).append("<br/>");
             }
 
             int hostileBV = backingScenario.getTeamTotalBattleValue(campaign, false);
@@ -370,6 +395,113 @@ public class StratConScenario implements IStratConDisplayable {
 
     public void setTurningPoint(boolean turningPoint) {
         this.turningPoint = turningPoint;
+    }
+
+    /**
+     * @return the order that started this scenario on a facility, or {@code null} if no order did
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public @Nullable FacilityOperation getFacilityOperation() {
+        return facilityOperation;
+    }
+
+    public void setFacilityOperation(@Nullable FacilityOperation facilityOperation) {
+        this.facilityOperation = facilityOperation;
+    }
+
+    /**
+     * @return {@code true} if this scenario is an enemy counterattack on a facility held by the player or their
+     *       employer. Ignoring one costs the facility.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isCounterattack() {
+        return counterattack;
+    }
+
+    public void setCounterattack(boolean counterattack) {
+        this.counterattack = counterattack;
+    }
+
+    /**
+     * @return for a fight over a siege (a {@link FacilityOperation#SIEGE} scenario), the besieged facility's hex;
+     *       otherwise {@code null}. The fight itself is on the besieging formation's hex.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public @Nullable StratConCoords getSiegeCoords() {
+        return siegeCoords;
+    }
+
+    public void setSiegeCoords(@Nullable StratConCoords siegeCoords) {
+        this.siegeCoords = siegeCoords;
+    }
+
+    /**
+     * @return {@code true} if this fight over a siege is the garrison's sortie; {@code false} if it is an enemy relief
+     *       force, or not a siege fight at all
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isSiegeSortie() {
+        return siegeSortie;
+    }
+
+    public void setSiegeSortie(boolean siegeSortie) {
+        this.siegeSortie = siegeSortie;
+    }
+
+    /**
+     * @return {@code true} if which facilities lent support to this fight was recorded when it was set up; fights set
+     *       up before this was tracked have no record, rather than an empty one
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isFacilitySupportRecorded() {
+        return facilitySupportRecorded;
+    }
+
+    public void setFacilitySupportRecorded(boolean facilitySupportRecorded) {
+        this.facilitySupportRecorded = facilitySupportRecorded;
+    }
+
+    /**
+     * @return the names of the facilities on your side that lent support to this fight from elsewhere in the sector
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    @XmlElementWrapper(name = "alliedFacilitySupport")
+    @XmlElement(name = "facility")
+    public List<String> getAlliedFacilitySupport() {
+        return alliedFacilitySupport;
+    }
+
+    public void setAlliedFacilitySupport(List<String> alliedFacilitySupport) {
+        this.alliedFacilitySupport = alliedFacilitySupport;
+    }
+
+    /**
+     * @return the hexes of the enemy facilities that lent support to this fight from elsewhere in the sector. Hexes,
+     *       not names, so a facility the player hasn't found can be shown without naming it.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    @XmlElementWrapper(name = "hostileFacilitySupport")
+    @XmlElement(name = "coords")
+    public List<StratConCoords> getHostileFacilitySupport() {
+        return hostileFacilitySupport;
+    }
+
+    public void setHostileFacilitySupport(List<StratConCoords> hostileFacilitySupport) {
+        this.hostileFacilitySupport = hostileFacilitySupport;
     }
 
     @XmlTransient

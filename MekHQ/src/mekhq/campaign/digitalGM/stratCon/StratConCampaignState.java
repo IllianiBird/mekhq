@@ -35,9 +35,12 @@ package mekhq.campaign.digitalGM.stratCon;
 import java.io.PrintWriter;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import javax.xml.namespace.QName;
 
+import jakarta.annotation.Nullable;
 import jakarta.xml.bind.JAXBContext;
 import jakarta.xml.bind.JAXBElement;
 import jakarta.xml.bind.Marshaller;
@@ -48,13 +51,15 @@ import jakarta.xml.bind.annotation.XmlRootElement;
 import jakarta.xml.bind.annotation.XmlTransient;
 import jakarta.xml.bind.annotation.adapters.XmlAdapter;
 import jakarta.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
-import megamek.common.annotations.Nullable;
 import megamek.logging.MMLogger;
 import mekhq.campaign.Campaign;
+import mekhq.campaign.digitalGM.stratCon.pointOfInterest.StratConPointOfInterest;
 import mekhq.campaign.digitalGM.stratCon.pointOfInterest.StratConScheduledPointOfInterest;
 import mekhq.campaign.mission.contract.AbstractContract;
 import mekhq.campaign.mission.scenarios.AtBScenario;
+import org.w3c.dom.Document;
 import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 /**
  * Contract-level state object for a StratCon campaign.
@@ -67,6 +72,12 @@ public class StratConCampaignState {
 
     public static final String ROOT_XML_ELEMENT_NAME = "StratConCampaignState";
 
+    private static final String SCHEDULED_SCENARIO_DATES_ELEMENT = "scheduledScenarioDates";
+    private static final String SCHEDULED_SCENARIO_DATE_ELEMENT = "scheduledScenarioDate";
+    // What saves from before 0.51.01 call the scheduled scenario dates; see renameLegacyElements
+    private static final String LEGACY_SCHEDULED_SCENARIO_DATES_ELEMENT = "weeklyScenarios";
+    private static final String LEGACY_SCHEDULED_SCENARIO_DATE_ELEMENT = "weeklyScenario";
+
     @XmlTransient
     private AbstractContract contract;
 
@@ -78,6 +89,16 @@ public class StratConCampaignState {
     // whether "Contracts Use Special Mechanics" was on when the contract was accepted; see
     // isContractsUseSpecialMechanics
     private boolean contractsUseSpecialMechanics;
+    // whether the Track Intensity Table options were on when the contract was accepted; see isMinimumOneTrackPerRoll
+    // and isRollTracksWeekly
+    private boolean minimumOneTrackPerRoll;
+    private boolean rollTracksWeekly;
+    // whether the contract's ordinary scenarios have been scheduled up front; see isNormalTempoScheduled
+    private boolean normalTempoScheduled;
+    // what has been placed from the point of interest schedule; see recordPlacedPointOfInterest
+    private boolean pointOfInterestLedgerSeeded;
+    private int placedPointOfInterestCount;
+    private Map<String, Integer> markedPointOfInterestCounts = new HashMap<>();
     private String briefingText;
     @XmlElement(required = true, defaultValue = "false")
     private boolean allowEarlyVictory;
@@ -89,9 +110,13 @@ public class StratConCampaignState {
     @XmlElement(name = "campaignTrack")
     private final List<StratConTrackState> tracks;
 
-    private List<LocalDate> weeklyScenarios;
+    private List<LocalDate> scheduledScenarioDates;
     private final List<LocalDate> strategicScenarioSpawnDates;
     private final List<StratConScheduledPointOfInterest> scheduledPointsOfInterest;
+    // enemy facility activity; see StratConEnemyFacilityActivity
+    private LocalDate lastCounterattackDate;
+    private LocalDate enemyEngineersScheduledUntil;
+    private final List<LocalDate> enemyEngineerDates;
 
     @XmlTransient
     public AbstractContract getContract() {
@@ -104,16 +129,18 @@ public class StratConCampaignState {
 
     public StratConCampaignState() {
         tracks = new ArrayList<>();
-        weeklyScenarios = new ArrayList<>();
+        scheduledScenarioDates = new ArrayList<>();
         strategicScenarioSpawnDates = new ArrayList<>();
         scheduledPointsOfInterest = new ArrayList<>();
+        enemyEngineerDates = new ArrayList<>();
     }
 
     public StratConCampaignState(AbstractContract contract) {
         tracks = new ArrayList<>();
-        weeklyScenarios = new ArrayList<>();
+        scheduledScenarioDates = new ArrayList<>();
         strategicScenarioSpawnDates = new ArrayList<>();
         scheduledPointsOfInterest = new ArrayList<>();
+        enemyEngineerDates = new ArrayList<>();
         setContract(contract);
     }
 
@@ -133,20 +160,24 @@ public class StratConCampaignState {
         tracks.add(track);
     }
 
+    /**
+     * @return the still-to-come days on which the contract's ordinary scenarios appear, one entry per scenario
+     *       (mutable; drained as they are generated)
+     */
     @XmlJavaTypeAdapter(value = LocalDateAdapter.class)
-    @XmlElementWrapper(name = "weeklyScenarios")
-    @XmlElement(name = "weeklyScenario")
-    public List<LocalDate> getWeeklyScenarios() {
-        return weeklyScenarios;
+    @XmlElementWrapper(name = SCHEDULED_SCENARIO_DATES_ELEMENT)
+    @XmlElement(name = SCHEDULED_SCENARIO_DATE_ELEMENT)
+    public List<LocalDate> getScheduledScenarioDates() {
+        return scheduledScenarioDates;
     }
 
-    public void addWeeklyScenario(LocalDate weeklyScenario) {
-        weeklyScenarios.add(weeklyScenario);
+    public void addScheduledScenarioDate(LocalDate scheduledScenarioDate) {
+        scheduledScenarioDates.add(scheduledScenarioDate);
     }
 
     @Deprecated(since = "0.51.0", forRemoval = true)
-    public void setWeeklyScenarios(final List<LocalDate> weeklyScenarios) {
-        this.weeklyScenarios = weeklyScenarios;
+    public void setScheduledScenarioDates(final List<LocalDate> scheduledScenarioDates) {
+        this.scheduledScenarioDates = scheduledScenarioDates;
     }
 
     /** @return the still-to-come days on which strategic-objective scenarios appear (mutable; drained as they spawn) */
@@ -184,8 +215,51 @@ public class StratConCampaignState {
     }
 
     /**
-     * Moves every date still to come in the contract's pre-rolled schedule - its strategic-objective scenarios and its
-     * points of interest - by the given number of days. Used when the contract's start date moves, so the schedule
+     * @return the day of the contract's most recent enemy counterattack, or {@code null} if there has been none
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    @XmlJavaTypeAdapter(value = LocalDateAdapter.class)
+    public @Nullable LocalDate getLastCounterattackDate() {
+        return lastCounterattackDate;
+    }
+
+    public void setLastCounterattackDate(@Nullable LocalDate lastCounterattackDate) {
+        this.lastCounterattackDate = lastCounterattackDate;
+    }
+
+    /**
+     * @return the day up to which enemy engineers have been scheduled, exclusive, or {@code null} if none have been
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    @XmlJavaTypeAdapter(value = LocalDateAdapter.class)
+    public @Nullable LocalDate getEnemyEngineersScheduledUntil() {
+        return enemyEngineersScheduledUntil;
+    }
+
+    public void setEnemyEngineersScheduledUntil(@Nullable LocalDate enemyEngineersScheduledUntil) {
+        this.enemyEngineersScheduledUntil = enemyEngineersScheduledUntil;
+    }
+
+    /**
+     * @return the still-to-come days on which enemy engineers appear, one entry each (mutable; drained as they appear)
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    @XmlJavaTypeAdapter(value = LocalDateAdapter.class)
+    @XmlElementWrapper(name = "enemyEngineerDates")
+    @XmlElement(name = "enemyEngineerDate")
+    public List<LocalDate> getEnemyEngineerDates() {
+        return enemyEngineerDates;
+    }
+
+    /**
+     * Moves every date still to come in the contract's pre-rolled schedule - its ordinary scenarios, its
+     * strategic-objective scenarios, and its points of interest - by the given number of days. Used when the contract's start date moves, so the schedule
      * keeps its place within the contract.
      *
      * @param days how many days to move them; negative moves them earlier
@@ -198,11 +272,146 @@ public class StratConCampaignState {
             return;
         }
 
+        scheduledScenarioDates.replaceAll(scenarioDate -> scenarioDate.plusDays(days));
         strategicScenarioSpawnDates.replaceAll(spawnDate -> spawnDate.plusDays(days));
+        enemyEngineerDates.replaceAll(engineerDate -> engineerDate.plusDays(days));
         for (StratConScheduledPointOfInterest scheduledPointOfInterest : scheduledPointsOfInterest) {
             LocalDate spawnDate = scheduledPointOfInterest.getSpawnDate();
             if (spawnDate != null) {
                 scheduledPointOfInterest.setSpawnDate(spawnDate.plusDays(days));
+            }
+        }
+    }
+
+    /**
+     * @return {@code true} if the contract's ordinary scenarios have been scheduled up front (see
+     *       {@link StratConScenarioTempo#scheduleNormalScenarios}); {@code false} for a contract begun in Single Drop
+     *       play or before scenarios were scheduled that way, which is scheduled on its next day outside Single Drop
+     *       play
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isNormalTempoScheduled() {
+        return normalTempoScheduled;
+    }
+
+    /**
+     * @param normalTempoScheduled whether the contract's ordinary scenarios have been scheduled up front
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public void setNormalTempoScheduled(boolean normalTempoScheduled) {
+        this.normalTempoScheduled = normalTempoScheduled;
+    }
+
+    /**
+     * @return {@code true} once the point of interest ledger counts everything placed over the contract's run (see
+     *       {@link #seedPointOfInterestLedger})
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isPointOfInterestLedgerSeeded() {
+        return pointOfInterestLedgerSeeded;
+    }
+
+    /**
+     * @param pointOfInterestLedgerSeeded whether the point of interest ledger counts everything placed so far
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public void setPointOfInterestLedgerSeeded(boolean pointOfInterestLedgerSeeded) {
+        this.pointOfInterestLedgerSeeded = pointOfInterestLedgerSeeded;
+    }
+
+    /**
+     * @return how many scheduled points of interest have been placed over the contract's run, whatever became of them
+     *       since
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public int getPlacedPointOfInterestCount() {
+        return placedPointOfInterestCount;
+    }
+
+    /**
+     * @param placedPointOfInterestCount how many scheduled points of interest have been placed
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public void setPlacedPointOfInterestCount(int placedPointOfInterestCount) {
+        this.placedPointOfInterestCount = placedPointOfInterestCount;
+    }
+
+    /**
+     * @return how many placed points of interest were marked under each initial state key - such as an assassination
+     *       lead to the real target - whatever became of them since (mutable)
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public Map<String, Integer> getMarkedPointOfInterestCounts() {
+        return markedPointOfInterestCounts;
+    }
+
+    /**
+     * @param markedPointOfInterestCounts how many placed points of interest were marked under each initial state key
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public void setMarkedPointOfInterestCounts(Map<String, Integer> markedPointOfInterestCounts) {
+        this.markedPointOfInterestCounts = (markedPointOfInterestCounts == null) ?
+                                                 new HashMap<>() :
+                                                 markedPointOfInterestCounts;
+    }
+
+    /**
+     * Counts a scheduled point of interest as placed, along with every mark it carries. Resolved, expired, or withdrawn
+     * points of interest leave their sector, so this is what remembers them when the schedule is rolled again (see
+     * {@link StratConScenarioTempo#regenerateSchedules}).
+     *
+     * @param scheduledPointOfInterest the scheduled point of interest just placed
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public void recordPlacedPointOfInterest(StratConScheduledPointOfInterest scheduledPointOfInterest) {
+        placedPointOfInterestCount++;
+        recordMarks(scheduledPointOfInterest.getInitialState());
+    }
+
+    /**
+     * Starts the point of interest ledger, if it has not been, from the points of interest now in the contract's
+     * sectors. A contract accepted before the ledger existed forgets those already gone from the map, so its ledger may
+     * come up short; one accepted since starts it empty.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public void seedPointOfInterestLedger() {
+        if (pointOfInterestLedgerSeeded) {
+            return;
+        }
+
+        for (StratConTrackState track : tracks) {
+            for (StratConPointOfInterest pointOfInterest : track.getPointsOfInterest()) {
+                placedPointOfInterestCount++;
+                recordMarks(pointOfInterest.getState());
+            }
+        }
+        pointOfInterestLedgerSeeded = true;
+    }
+
+    private void recordMarks(Map<String, String> state) {
+        for (Map.Entry<String, String> entry : state.entrySet()) {
+            if (Boolean.parseBoolean(entry.getValue())) {
+                markedPointOfInterestCounts.merge(entry.getKey(), 1, Integer::sum);
             }
         }
     }
@@ -288,6 +497,38 @@ public class StratConCampaignState {
      */
     public void setContractsUseSpecialMechanics(boolean contractsUseSpecialMechanics) {
         this.contractsUseSpecialMechanics = contractsUseSpecialMechanics;
+    }
+
+    /**
+     * @return {@code true} if "Minimum of 1 Hot Spots Track per Roll" was on when the contract was accepted, or when its
+     *       schedules were last regenerated by editing the contract. Changing the option mid-contract has no effect
+     *       otherwise.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isMinimumOneTrackPerRoll() {
+        return minimumOneTrackPerRoll;
+    }
+
+    public void setMinimumOneTrackPerRoll(boolean minimumOneTrackPerRoll) {
+        this.minimumOneTrackPerRoll = minimumOneTrackPerRoll;
+    }
+
+    /**
+     * @return {@code true} if "Roll Hot Spots Tracks Weekly, Not Monthly" was on when the contract was accepted, or
+     *       when its schedules were last regenerated by editing the contract. Changing the option mid-contract has no
+     *       effect otherwise.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isRollTracksWeekly() {
+        return rollTracksWeekly;
+    }
+
+    public void setRollTracksWeekly(boolean rollTracksWeekly) {
+        this.rollTracksWeekly = rollTracksWeekly;
     }
 
     public String getBriefingText() {
@@ -489,6 +730,7 @@ public class StratConCampaignState {
         StratConCampaignState resultingCampaignState = null;
 
         try {
+            renameLegacyElements(xmlNode);
             JAXBContext context = JAXBContext.newInstance(StratConCampaignState.class);
             Unmarshaller um = context.createUnmarshaller();
             JAXBElement<StratConCampaignState> templateElement = um.unmarshal(xmlNode, StratConCampaignState.class);
@@ -504,10 +746,46 @@ public class StratConCampaignState {
             for (StratConTrackState track : resultingCampaignState.getTracks()) {
                 track.restoreReturnDates();
                 track.restoreAssignedCoordForces();
+                track.restoreFacilityDefinitions();
             }
         }
 
         return resultingCampaignState;
+    }
+
+    /**
+     * Renames the elements older saves wrote under names since changed, so they load into the renamed properties.
+     * Saves from before 0.51.01 hold the scheduled scenario dates as {@code weeklyScenarios}.
+     *
+     * @param xmlNode the node with the campaign state, changed in place
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    private static void renameLegacyElements(Node xmlNode) {
+        Document document = xmlNode.getOwnerDocument();
+        if (document == null) {
+            return;
+        }
+
+        NodeList childNodes = xmlNode.getChildNodes();
+        for (int index = 0; index < childNodes.getLength(); index++) {
+            Node childNode = childNodes.item(index);
+            if ((childNode.getNodeType() != Node.ELEMENT_NODE)
+                      || !LEGACY_SCHEDULED_SCENARIO_DATES_ELEMENT.equals(childNode.getNodeName())) {
+                continue;
+            }
+
+            NodeList dateNodes = childNode.getChildNodes();
+            for (int dateIndex = 0; dateIndex < dateNodes.getLength(); dateIndex++) {
+                Node dateNode = dateNodes.item(dateIndex);
+                if ((dateNode.getNodeType() == Node.ELEMENT_NODE)
+                          && LEGACY_SCHEDULED_SCENARIO_DATE_ELEMENT.equals(dateNode.getNodeName())) {
+                    document.renameNode(dateNode, dateNode.getNamespaceURI(), SCHEDULED_SCENARIO_DATE_ELEMENT);
+                }
+            }
+            document.renameNode(childNode, childNode.getNamespaceURI(), SCHEDULED_SCENARIO_DATES_ELEMENT);
+        }
     }
 
     /**

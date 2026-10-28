@@ -88,6 +88,7 @@ import mekhq.campaign.log.MedicalLogger;
 import mekhq.campaign.personnel.InjuryType;
 import mekhq.campaign.personnel.Person;
 import mekhq.campaign.personnel.enums.PersonnelRoleSubType;
+import mekhq.campaign.personnel.medical.advancedMedicalAlternate.AdvancedMedicalAlternateImplants;
 import mekhq.campaign.personnel.quartermaster.DefaultKitChanges;
 import mekhq.campaign.personnel.skills.RandomSkillPreferences;
 import mekhq.campaign.personnel.skills.SkillType;
@@ -861,7 +862,7 @@ public class CampaignOptionsPane extends JPanel {
         // Human Resources
         if (personnelPages != null) {
             personnelPages.applyCampaignOptionsToCampaign(campaign, options);
-            biographyPages.applyCampaignOptionsToCampaign(options);
+            biographyPages.applyCampaignOptionsToCampaign(options, isSaveAction);
             relationshipsPages.applyCampaignOptionsToCampaign(options);
             salariesPages.applyCampaignOptionsToCampaign(options);
             turnoverAndRetentionPages.applyCampaignOptionsToCampaign(options);
@@ -884,7 +885,7 @@ public class CampaignOptionsPane extends JPanel {
         // Operations
         if (financesPages != null) {
             financesPages.applyCampaignOptionsToCampaign(options);
-            marketsPages.applyCampaignOptionsToCampaign(options);
+            marketsPages.applyCampaignOptionsToCampaign(options, isSaveAction);
             rulesetsPages.applyCampaignOptionsToCampaign(options);
             systemsPages.applyCampaignOptionsToCampaign(options);
         }
@@ -893,13 +894,21 @@ public class CampaignOptionsPane extends JPanel {
         roleplayPage.applyCampaignOptionsToCampaign(options);
 
         // Tidy up
-        if (preset == null) {
-            recalculateCombatTeams(campaign);
-            MekHQ.triggerEvent(new OptionsChangedEvent(campaign, options));
-
-            options.updateGameOptionsFromCampaignOptions(campaign.getGameOptions());
-            MekHQ.triggerEvent(new OptionsChangedEvent(campaign));
+        // Saving a preset writes only into the preset's own copies; nothing below may touch the running campaign.
+        if (isSaveAction) {
+            // Keep the preset's MegaMek options in step with the campaign options they mirror (tech level, edge, ...)
+            if ((preset != null) && (preset.getGameOptions() != null)) {
+                options.updateGameOptionsFromCampaignOptions(preset.getGameOptions());
+            }
+            return;
         }
+
+        recalculateCombatTeams(campaign);
+        MekHQ.triggerEvent(new OptionsChangedEvent(campaign, options));
+
+        options.updateGameOptionsFromCampaignOptions(campaign.getGameOptions());
+        options.applyGlobalSettings();
+        MekHQ.triggerEvent(new OptionsChangedEvent(campaign));
 
         campaign.resetRandomDeath();
 
@@ -1042,6 +1051,7 @@ public class CampaignOptionsPane extends JPanel {
 
         boolean newIsUseAltAdvancedMedical = newOptions.useAltAdvancedMedical();
         if (!isStartUp && newIsUseAltAdvancedMedical && !oldIsUseAltAdvancedMedical) { // Has tracking changed?
+            recordDerivedImplantProsthetics(campaign);
             new AltAdvancedMedicalCampaignOptionsChangedConfirmationDialog(campaign);
         }
 
@@ -1095,6 +1105,14 @@ public class CampaignOptionsPane extends JPanel {
         boolean newTechsNeedToolKit = newOptions.techsNeedToolKit();
         if (!isStartUp && newTechsNeedToolKit && !oldOptions.techsNeedToolKit()) { // Has tracking changed?
             new TechsNeedToolKitCampaignOptionsChangedConfirmationDialog(campaign);
+        }
+    }
+
+    private static void recordDerivedImplantProsthetics(Campaign campaign) {
+        // Advanced Alternate Medical works some implants out each day from the prosthetics present. Anyone already
+        // holding one of those implants needs the prosthetics recorded, or the first daily check takes it away.
+        for (Person person : campaign.getPlayerForce().getHumanResources().getPersonnel()) {
+            AdvancedMedicalAlternateImplants.recordMissingDerivedImplantProsthetics(campaign, person);
         }
     }
 
@@ -1182,7 +1200,11 @@ public class CampaignOptionsPane extends JPanel {
             return;
         }
 
+        // The preset's MegaMek game options are deliberately not applied here. They are only taken when starting a
+        // new campaign (see DataLoadingDialog); loading a preset into a running campaign leaves its game options alone.
+
         ensureAllSectionsLoaded();
+        // A preset saved without campaign options leaves those pages as they are
         CampaignOptions presetCampaignOptions = campaignPreset.getCampaignOptions();
 
         LocalDate presetDate = campaign.getLocalDate();
@@ -1197,9 +1219,10 @@ public class CampaignOptionsPane extends JPanel {
         // Human Resources
         personnelPages.loadValuesFromCampaignOptions(presetCampaignOptions, campaign.getVersion());
         biographyPages.loadValuesFromCampaignOptions(presetCampaignOptions,
-              presetCampaignOptions.get(CampaignOption.RANDOM_ORIGIN_OPTIONS),
+              (presetCampaignOptions == null) ? null : presetCampaignOptions.get(CampaignOption.RANDOM_ORIGIN_OPTIONS),
               campaignPreset.getRankSystem());
         relationshipsPages.loadValuesFromCampaignOptions(presetCampaignOptions);
+        salariesPages.loadValuesFromCampaignOptions(presetCampaignOptions);
         turnoverAndRetentionPages.loadValuesFromCampaignOptions(presetCampaignOptions);
 
         // Advancement
@@ -1208,8 +1231,11 @@ public class CampaignOptionsPane extends JPanel {
         attributesAndTraitsPage.loadValuesFromCampaignOptions(presetCampaignOptions,
               campaignPreset.getRandomSkillPreferences());
         skillsPages.loadValuesFromCampaignOptions(presetCampaignOptions, campaignPreset.getSkills());
-        // The ability page is a special case, so handled differently to other pages
-        abilitiesPages.buildAllAbilityInfo(campaignPreset.getSpecialAbilities());
+        // The ability page is a special case, so handled differently to other pages. A preset saved without campaign
+        // options carries no abilities, and rebuilding from that empty map would switch every ability off.
+        if (presetCampaignOptions != null) {
+            abilitiesPages.buildAllAbilityInfo(campaignPreset.getSpecialAbilities());
+        }
 
         // Logistics
         equipmentAndSuppliesPages.loadValuesFromCampaignOptions(presetCampaignOptions);

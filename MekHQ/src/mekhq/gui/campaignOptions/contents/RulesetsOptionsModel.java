@@ -83,6 +83,11 @@ class RulesetsOptionsModel {
     boolean useAdvancedScouting;
     boolean essentialScenariosOnly;
     boolean contractsUseSpecialMechanics;
+    boolean useEmployerLostPlanetReactions;
+    boolean useFacilityOperations;
+    double enemyFacilityActivity;
+    boolean useSupplyLines;
+    double facilityDensity;
     boolean noSeedForces;
     boolean useGenericBattleValue;
     boolean useVerboseBidding;
@@ -124,7 +129,7 @@ class RulesetsOptionsModel {
         moraleDefeatEffect = options.get(CampaignOption.MORALE_DEFEAT_EFFECT);
         moraleDecisiveDefeatEffect = options.get(CampaignOption.MORALE_DECISIVE_DEFEAT_EFFECT);
         autoResolveMethod = options.get(CampaignOption.AUTO_RESOLVE_METHOD);
-        strategicViewTheme = options.getStrategicViewTheme().getName();
+        strategicViewTheme = options.get(CampaignOption.STRATEGIC_VIEW_MINIMAP_THEME);
         autoResolveVictoryChanceEnabled = options.get(CampaignOption.AUTO_RESOLVE_VICTORY_CHANCE_ENABLED);
         autoResolveNumberOfScenarios = options.get(CampaignOption.AUTO_RESOLVE_NUMBER_OF_SCENARIOS);
         autoResolveExperimentalPacarGuiEnabled = options.get(CampaignOption.AUTO_RESOLVE_EXPERIMENTAL_PACAR_GUI_ENABLED);
@@ -132,6 +137,11 @@ class RulesetsOptionsModel {
         useAdvancedScouting = options.get(CampaignOption.USE_ADVANCED_SCOUTING);
         essentialScenariosOnly = options.get(CampaignOption.ESSENTIAL_SCENARIOS_ONLY);
         contractsUseSpecialMechanics = options.get(CampaignOption.CONTRACTS_USE_SPECIAL_MECHANICS);
+        useEmployerLostPlanetReactions = options.get(CampaignOption.USE_EMPLOYER_LOST_PLANET_REACTIONS);
+        useFacilityOperations = options.get(CampaignOption.USE_FACILITY_OPERATIONS);
+        enemyFacilityActivity = options.get(CampaignOption.ENEMY_FACILITY_ACTIVITY);
+        useSupplyLines = options.get(CampaignOption.USE_SUPPLY_LINES);
+        facilityDensity = options.get(CampaignOption.FACILITY_DENSITY);
         noSeedForces = options.get(CampaignOption.NO_SEED_FORCES);
         useGenericBattleValue = options.get(CampaignOption.USE_GENERIC_BATTLE_VALUE);
         useVerboseBidding = options.get(CampaignOption.USE_VERBOSE_BIDDING);
@@ -174,7 +184,7 @@ class RulesetsOptionsModel {
         options.set(CampaignOption.MORALE_DEFEAT_EFFECT, moraleDefeatEffect);
         options.set(CampaignOption.MORALE_DECISIVE_DEFEAT_EFFECT, moraleDecisiveDefeatEffect);
         options.set(CampaignOption.AUTO_RESOLVE_METHOD, autoResolveMethod);
-        options.setStrategicViewTheme(strategicViewTheme);
+        options.set(CampaignOption.STRATEGIC_VIEW_MINIMAP_THEME, strategicViewTheme);
         options.set(CampaignOption.AUTO_RESOLVE_VICTORY_CHANCE_ENABLED, autoResolveVictoryChanceEnabled);
         options.set(CampaignOption.AUTO_RESOLVE_NUMBER_OF_SCENARIOS, autoResolveNumberOfScenarios);
         options.set(CampaignOption.AUTO_RESOLVE_EXPERIMENTAL_PACAR_GUI_ENABLED, autoResolveExperimentalPacarGuiEnabled);
@@ -182,6 +192,11 @@ class RulesetsOptionsModel {
         options.set(CampaignOption.USE_ADVANCED_SCOUTING, useAdvancedScouting);
         options.set(CampaignOption.ESSENTIAL_SCENARIOS_ONLY, essentialScenariosOnly);
         options.set(CampaignOption.CONTRACTS_USE_SPECIAL_MECHANICS, contractsUseSpecialMechanics);
+        options.set(CampaignOption.USE_EMPLOYER_LOST_PLANET_REACTIONS, useEmployerLostPlanetReactions);
+        options.set(CampaignOption.USE_FACILITY_OPERATIONS, useFacilityOperations);
+        options.set(CampaignOption.ENEMY_FACILITY_ACTIVITY, enemyFacilityActivity);
+        options.set(CampaignOption.USE_SUPPLY_LINES, useSupplyLines);
+        options.set(CampaignOption.FACILITY_DENSITY, facilityDensity);
         options.set(CampaignOption.NO_SEED_FORCES, noSeedForces);
         options.set(CampaignOption.USE_GENERIC_BATTLE_VALUE, useGenericBattleValue);
         options.set(CampaignOption.USE_VERBOSE_BIDDING, useVerboseBidding);

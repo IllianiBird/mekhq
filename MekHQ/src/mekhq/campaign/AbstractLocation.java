@@ -50,11 +50,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.Set;
 
 import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
 import jakarta.xml.bind.annotation.XmlElement;
 import jakarta.xml.bind.annotation.XmlTransient;
 import jakarta.xml.bind.annotation.adapters.XmlAdapter;
 import jakarta.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
-import megamek.common.annotations.Nullable;
 import megamek.logging.MMLogger;
 import mekhq.campaign.campaignOptions.CampaignOptions;
 import mekhq.campaign.location.ILocation;
@@ -67,6 +67,7 @@ import mekhq.campaign.personnel.InjuryType;
 import mekhq.campaign.personnel.Person;
 import mekhq.campaign.personnel.medical.advancedMedical.InjuryTypes;
 import mekhq.campaign.personnel.medical.advancedMedicalAlternate.AlternateInjuries;
+import mekhq.campaign.personnel.turnoverAndRetention.Fatigue;
 import mekhq.campaign.universe.Planet;
 import mekhq.campaign.universe.PlanetarySystem;
 import mekhq.campaign.universe.Systems;
@@ -180,6 +181,34 @@ public abstract class AbstractLocation implements IPlace {
         this.currentPlanet = currentPlanet;
     }
 
+    /**
+     * Rebinds planetary references after campaign overrides change, without moving this location or changing its
+     * travel progress. A world removed by an override falls back to the primary world, as it does on campaign load.
+     */
+    void refreshPlanetarySystems(Campaign campaign) {
+        if (currentSystem != null) {
+            PlanetarySystem updatedSystem = campaign.getSystemById(currentSystem.getId());
+            if (updatedSystem == null) {
+                logger.warn("Couldn't refresh system {}; retaining the location's existing system.",
+                      currentSystem.getId());
+            } else {
+                currentSystem = updatedSystem;
+                if (currentPlanet != null) {
+                    String planetId = currentPlanet.getId();
+                    currentPlanet = currentSystem.getPlanetById(planetId);
+                    if (currentPlanet == null) {
+                        logger.warn("Couldn't find world {} in system {}; falling back to the primary world.",
+                              planetId, currentSystem.getId());
+                    }
+                }
+            }
+        }
+        JumpPath jumpPath = getJumpPath();
+        if (jumpPath != null) {
+            jumpPath.refreshPlanetarySystems(campaign);
+        }
+    }
+
     @Override
     @Nullable
     public @Nonnull LocationNode getLocationNode() {
@@ -208,6 +237,7 @@ public abstract class AbstractLocation implements IPlace {
                 }
 
                 person.changeFatigue(fatigueRate);
+                Fatigue.processFatigueActions(campaign, person);
             }
         }
     }

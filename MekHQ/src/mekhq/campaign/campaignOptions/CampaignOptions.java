@@ -36,11 +36,12 @@ package mekhq.campaign.campaignOptions;
 import static megamek.common.TechConstants.getSimpleLevel;
 import static megamek.common.options.OptionsConstants.*;
 
-import java.io.File;
 import java.util.Arrays;
 import java.util.Objects;
 
 import jakarta.annotation.Nonnull;
+import megamek.client.generator.RandomGenderGenerator;
+import megamek.client.generator.RandomNameGenerator;
 import megamek.common.TechConstants;
 import megamek.common.enums.NeuralInterfaceMode;
 import megamek.common.enums.SkillLevel;
@@ -113,7 +114,7 @@ public class CampaignOptions {
         // Initialize any reused variables
         final PersonnelRole[] personnelRoles = PersonnelRole.values();
 
-        for (final PartRepairType type : PartRepairType.values()) {
+        for (final PartRepairType type : PartRepairType.getMRMSValidTypes()) {
             get(CampaignOption.MRMS_OPTIONS).add(new MRMSOption(type));
         }
         get(CampaignOption.PLANET_TECH_ACQUISITION_BONUS).put(PlanetarySophistication.ADVANCED, -2); // TODO: needs to be verified
@@ -233,7 +234,6 @@ public class CampaignOptions {
         get(CampaignOption.ATB_BATTLE_CHANCE)[CombatRole.FRONTLINE.ordinal()] = 20;
         get(CampaignOption.ATB_BATTLE_CHANCE)[CombatRole.PATROL.ordinal()] = 60;
         get(CampaignOption.ATB_BATTLE_CHANCE)[CombatRole.TRAINING.ordinal()] = 10;
-        get(CampaignOption.ATB_BATTLE_CHANCE)[CombatRole.CADRE.ordinal()] = 10;
 
         set(CampaignOption.USE_FACTION_STANDING_OUTLAWED, true);
     }
@@ -527,16 +527,19 @@ public class CampaignOptions {
 
     // endregion File IO
 
-    public File getStrategicViewTheme() {
+    /**
+     * Pushes the options that MegaMek holds globally rather than per campaign into MegaMek: the gender generator's
+     * percent female, the name generator's faction and the strategic view minimap theme. Call this whenever these
+     * options become the active campaign's options (loading a campaign, applying the options dialog), and never for
+     * options that only belong to a preset.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public void applyGlobalSettings() {
+        RandomGenderGenerator.setPercentFemale(get(CampaignOption.PERCENT_FEMALE));
+        RandomNameGenerator.getInstance().setChosenFaction(get(CampaignOption.NAME_GENERATOR_FACTION));
         CLIENT_PREFERENCES.setStrategicViewTheme(get(CampaignOption.STRATEGIC_VIEW_MINIMAP_THEME));
-        return CLIENT_PREFERENCES.getStrategicViewTheme();
-    }
-
-    public void setStrategicViewTheme(String minimapStyle) {
-        // it is persisted here to have something in the campaign options persisted that
-        // will change the GUI preference for the theme
-        set(CampaignOption.STRATEGIC_VIEW_MINIMAP_THEME, minimapStyle);
-        CLIENT_PREFERENCES.setStrategicViewTheme(minimapStyle);
     }
 
     /**
@@ -567,6 +570,44 @@ public class CampaignOptions {
      * @return {@code true} if both faction standing tracking and faction standing command circuit usage are enabled;
      *       {@code false} otherwise.
      */
+    /**
+     * Hot Spots upkeep replaces unit maintenance, so maintenance is never charged alongside it, whatever its own option
+     * says. The options dialog already prevents combining them; this also covers presets and hand-edited saves.
+     *
+     * @return {@code true} if unit maintenance is charged
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isChargingMaintenance() {
+        return get(CampaignOption.PAY_FOR_MAINTAIN) && !get(CampaignOption.PAY_FOR_HOT_SPOTS_UPKEEP);
+    }
+
+    /**
+     * Hot Spots upkeep replaces overhead, so overhead is never charged alongside it, whatever its own option says.
+     *
+     * @return {@code true} if overhead is charged
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isChargingOverhead() {
+        return get(CampaignOption.PAY_FOR_OVERHEAD) && !get(CampaignOption.PAY_FOR_HOT_SPOTS_UPKEEP);
+    }
+
+    /**
+     * Hot Spots upkeep replaces peacetime operating costs, so they are never charged alongside it, whatever their own
+     * option says.
+     *
+     * @return {@code true} if peacetime operating costs are charged
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean isChargingPeacetimeCost() {
+        return get(CampaignOption.USE_PEACETIME_COST) && !get(CampaignOption.PAY_FOR_HOT_SPOTS_UPKEEP);
+    }
+
     public boolean isUseFactionStandingCommandCircuitSafe() {
         return get(CampaignOption.TRACK_FACTION_STANDING) && get(CampaignOption.USE_FACTION_STANDING_COMMAND_CIRCUIT);
     }

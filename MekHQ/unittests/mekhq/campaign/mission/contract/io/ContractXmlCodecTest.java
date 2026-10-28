@@ -116,6 +116,7 @@ class ContractXmlCodecTest {
         contract.setNature(ContractNature.PROVING_GROUND);
         contract.setSharesPercent(45);
         contract.setStatus(MissionStatus.ACTIVE);
+        contract.setMandatedCompletionStatus(MissionStatus.PARTIAL);
         contract.setSalvagedByUnitValue(Money.of(1_250_000));
         contract.setSalvagedByEmployerValue(Money.of(750_000));
         contract.setRequiredVictoryPoints(9);
@@ -212,6 +213,23 @@ class ContractXmlCodecTest {
         assertNotNull(reloaded, "a contract carrying almost nothing must still parse");
         assertNull(reloaded.getStartDate());
         assertEquals(ContractMoraleLevel.STALEMATE, reloaded.getMoraleLevel());
+    }
+
+    @Test
+    void mandatedCompletionStatusSurvivesARoundTrip() throws Exception {
+        AbstractContract reloaded = reparse(write(fullyPopulatedContract()));
+
+        assertEquals(MissionStatus.PARTIAL, reloaded.getMandatedCompletionStatus());
+    }
+
+    @Test
+    void anUnsetMandatedCompletionStatusStaysUnsetAcrossARoundTrip() throws Exception {
+        AbstractContract contract = fullyPopulatedContract();
+        contract.setMandatedCompletionStatus(null);
+
+        AbstractContract reloaded = reparse(write(contract));
+
+        assertNull(reloaded.getMandatedCompletionStatus(), "an unset outcome must stay unset");
     }
 
     @Test
@@ -360,6 +378,91 @@ class ContractXmlCodecTest {
     }
 
     // endregion robustness
+
+    // region salvage taper
+
+    @Test
+    void anExactScaleSurvivesARoundTrip() throws Exception {
+        AbstractContract contract = fullyPopulatedContract();
+        contract.setScale(3.456789);
+
+        AbstractContract reloaded = reparse(write(contract));
+
+        assertEquals(3.456789, reloaded.getExactScale(), 1e-12);
+        assertEquals(4, reloaded.getScale(), "the rules-as-written Scale still rounds up");
+    }
+
+    @Test
+    void aWholeNumberScaleFromAnOlderSaveIsRead() throws Exception {
+        String xml = "<contract type=\"" + ChaosContract.class.getName() + "\">"
+                           + "<scale>3</scale>"
+                           + "</contract>";
+
+        AbstractContract reloaded = parse(xml);
+
+        assertNotNull(reloaded);
+        assertEquals(3.0, reloaded.getExactScale(), 1e-12);
+        assertEquals(3, reloaded.getScale());
+    }
+
+    @Test
+    void aTaperedSalvageMultiplierSurvivesARoundTrip() throws Exception {
+        AbstractContract contract = fullyPopulatedContract();
+        contract.setSalvageTaperMultiplier(5.0 / 7.0);
+
+        AbstractContract reloaded = reparse(write(contract));
+
+        assertEquals(5.0 / 7.0, reloaded.getSalvageTaperMultiplier(), 1e-12);
+    }
+
+    @Test
+    void aTaperedContractIsIdempotentAcrossTwoRoundTrips() throws Exception {
+        AbstractContract contract = fullyPopulatedContract();
+        contract.setSalvageTaperMultiplier(0.65);
+        String firstPass = write(contract);
+
+        String secondPass = write(reparse(firstPass));
+
+        assertEquals(firstPass, secondPass);
+    }
+
+    /** Untapered contracts write nothing, so saves made without the option are unchanged. */
+    @Test
+    void anUntaperedContractDoesNotWriteTheTag() {
+        AbstractContract contract = fullyPopulatedContract();
+        contract.setSalvageTaperMultiplier(1.0);
+
+        assertFalse(write(contract).contains("salvageTaperMultiplier"));
+    }
+
+    /** Saves from before the taper existed have no tag and must load with full salvage. */
+    @Test
+    void aSaveWithoutTheTagLoadsWithFullSalvage() throws Exception {
+        String xml = "<contract type=\"" + ChaosContract.class.getName() + "\">"
+                           + "<contractName>Old Save</contractName>"
+                           + "</contract>";
+
+        AbstractContract reloaded = parse(xml);
+
+        assertNotNull(reloaded);
+        assertEquals(1.0, reloaded.getSalvageTaperMultiplier());
+    }
+
+    @Test
+    void aMalformedTaperIsSkippedAndLeavesFullSalvage() throws Exception {
+        String xml = "<contract type=\"" + ChaosContract.class.getName() + "\">"
+                           + "<salvageTaperMultiplier>not-a-number</salvageTaperMultiplier>"
+                           + "<contractName>Still Here</contractName>"
+                           + "</contract>";
+
+        AbstractContract reloaded = parse(xml);
+
+        assertNotNull(reloaded);
+        assertEquals("Still Here", reloaded.getName());
+        assertEquals(1.0, reloaded.getSalvageTaperMultiplier());
+    }
+
+    // endregion salvage taper
 
     // region helpers
 

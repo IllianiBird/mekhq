@@ -232,8 +232,12 @@ public class MedicalController {
         if (actionCheckResult.isSuccess()) {
             boolean inInfirmary = !(null == patient.getDoctorId());
             patient.heal();
-            if (inInfirmary && !patient.needsFixing() && patient.getPrisonerStatus().isFreeOrBondsman()) {
-                MedicalLogger.dismissedFromInfirmary(patient, campaign);
+            if (inInfirmary && !patient.needsFixing()) {
+                if (patient.getPrisonerStatus().isFreeOrBondsman()) {
+                    MedicalLogger.dismissedFromInfirmary(patient, campaign);
+                } else {
+                    MedicalLogger.prisonerDismissedFromInfirmary(patient, campaign);
+                }
             }
             Unit unit = patient.getUnit();
             if (unit != null) {
@@ -278,6 +282,7 @@ public class MedicalController {
      * <p>A doctor is considered valid if:</p>
      *
      * <ul>
+     *     <li>They are still active (not dead, retired, missing or otherwise gone from the unit).</li>
      *     <li>They have the necessary skills (are flagged as a doctor).</li>
      *     <li>They have not exceeded their medical capacity (based on the campaign rules).</li>
      * </ul>
@@ -291,6 +296,14 @@ public class MedicalController {
      */
     private boolean isValidDoctor(Person patient, Person doctor) {
         int medicalCapacity = doctor.getDoctorMedicalCapacity(isDoctorsUseAdministration, maximumPatients);
+        if (!doctor.getStatus().isActiveFlexible()) {
+            campaign.addReport(MEDICAL, getFormattedTextAt(RESOURCE_BUNDLE,
+                  "MedicalController.report.doctorUnavailable",
+                  doctor.getHyperlinkedFullTitle(), patient.getHyperlinkedFullTitle()));
+            unassignDoctor(patient, doctor);
+            return false;
+        }
+
         if (!doctor.isDoctor()) {
             campaign.addReport(MEDICAL, getFormattedTextAt(RESOURCE_BUNDLE, "MedicalController.report.notADoctor",
                   doctor.getHyperlinkedFullTitle(), patient.getHyperlinkedFullTitle()));

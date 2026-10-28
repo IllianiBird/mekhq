@@ -36,6 +36,8 @@ package mekhq.campaign.finances;
 import static mekhq.campaign.enums.DailyReportType.FINANCES;
 import static mekhq.campaign.enums.DailyReportType.PERSONNEL;
 import static mekhq.campaign.finances.WeeklyNetWorth.parseWeeklyNetWorthFromXML;
+import static mekhq.utilities.MHQInternationalization.getFormattedTextAt;
+import static mekhq.utilities.MHQInternationalization.getTextAt;
 import static mekhq.utilities.ReportingUtilities.getNegativeColor;
 import static mekhq.utilities.ReportingUtilities.messageSurroundedBySpanWithColor;
 
@@ -55,7 +57,7 @@ import java.util.ResourceBundle;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import megamek.common.annotations.Nullable;
+import jakarta.annotation.Nullable;
 import megamek.logging.MMLogger;
 import mekhq.MekHQ;
 import mekhq.campaign.Campaign;
@@ -66,7 +68,7 @@ import mekhq.campaign.events.transactions.TransactionCreditEvent;
 import mekhq.campaign.events.transactions.TransactionDebitEvent;
 import mekhq.campaign.finances.enums.TransactionType;
 import mekhq.campaign.mission.contract.AbstractContract;
-import mekhq.campaign.mission.contract.contractSpecialRules.ContractSupportPayments;
+import mekhq.campaign.mission.contract.contractData.MissionStatus;
 import mekhq.campaign.personnel.Person;
 import mekhq.io.FileType;
 import mekhq.utilities.MHQXMLUtility;
@@ -82,6 +84,7 @@ import org.w3c.dom.NodeList;
 public class Finances {
     private static final MMLogger LOGGER = MMLogger.create(Finances.class);
 
+    private static final String RESOURCE_BUNDLE = "mekhq.resources.Finances";
     private final transient ResourceBundle resourceMap = ResourceBundle.getBundle("mekhq.resources.Finances",
           MekHQ.getMHQOptions().getLocale());
 
@@ -374,6 +377,11 @@ public class Finances {
         // Handle contract payments
         if (isNewMonth) {
             for (AbstractContract contract : campaign.getActiveContracts()) {
+                // A breached contract pays nothing more, even if it is still running out its last day
+                if (contract.getMandatedCompletionStatus() == MissionStatus.BREACH) {
+                    continue;
+                }
+
                 credit(TransactionType.CONTRACT_PAYMENT,
                       today,
                       contract.getMonthlyPayOut(),
@@ -391,7 +399,7 @@ public class Finances {
 
         // Handle peacetime operating expenses, payroll, and loan payments
         if (isNewMonth) {
-            if (campaignOptions.get(CampaignOption.USE_PEACETIME_COST)) {
+            if (campaignOptions.isChargingPeacetimeCost()) {
                 if (!campaignOptions.get(CampaignOption.SHOW_PEACETIME_COST)) {
                     // Do not include salaries as that will be tracked below
                     Money peacetimeCost = accountant.getPeacetimeCost(false);
@@ -402,8 +410,6 @@ public class Finances {
                           resourceMap.getString("PeacetimeCosts.title"))) {
                         campaign.addReport(FINANCES, String.format(resourceMap.getString("PeacetimeCosts.text"),
                               peacetimeCost.toAmountAndSymbolString()));
-                        ContractSupportPayments.reimburseStraightSupport(campaign, peacetimeCost,
-                              resourceMap.getString("PeacetimeCosts.title"));
                     } else {
                         addReportInsufficientFunds(campaign, resourceMap.getString("OperatingCosts.text"));
                     }
@@ -418,8 +424,6 @@ public class Finances {
                           resourceMap.getString("PeacetimeCostsParts.title"))) {
                         campaign.addReport(FINANCES, String.format(resourceMap.getString("PeacetimeCostsParts.text"),
                               sparePartsCost.toAmountAndSymbolString()));
-                        ContractSupportPayments.reimburseStraightSupport(campaign, sparePartsCost,
-                              resourceMap.getString("PeacetimeCostsParts.title"));
                     } else {
                         addReportInsufficientFunds(campaign, resourceMap.getString("SpareParts.text"));
                     }
@@ -431,8 +435,6 @@ public class Finances {
                         campaign.addReport(FINANCES,
                               String.format(resourceMap.getString("PeacetimeCostsAmmunition.text"),
                                     ammoCost.toAmountAndSymbolString()));
-                        ContractSupportPayments.reimburseStraightSupport(campaign, ammoCost,
-                              resourceMap.getString("PeacetimeCostsAmmunition.title"));
                     } else {
                         addReportInsufficientFunds(campaign, resourceMap.getString("TrainingMunitions.text"));
                     }
@@ -443,8 +445,6 @@ public class Finances {
                           resourceMap.getString("PeacetimeCostsFuel.title"))) {
                         campaign.addReport(FINANCES, String.format(resourceMap.getString("PeacetimeCostsFuel.text"),
                               fuelCost.toAmountAndSymbolString()));
-                        ContractSupportPayments.reimburseStraightSupport(campaign, fuelCost,
-                              resourceMap.getString("PeacetimeCostsFuel.title"));
                     } else {
                         addReportInsufficientFunds(campaign, resourceMap.getString("Fuel.text"));
                     }
@@ -492,7 +492,7 @@ public class Finances {
             }
 
             // Handle overhead expenses
-            if (campaignOptions.get(CampaignOption.PAY_FOR_OVERHEAD)) {
+            if (campaignOptions.isChargingOverhead()) {
                 Money overheadCost = accountant.getOverheadExpenses();
 
                 if (debit(TransactionType.OVERHEAD, today, overheadCost, resourceMap.getString("Overhead.title"))) {
@@ -500,6 +500,23 @@ public class Finances {
                           overheadCost.toAmountAndSymbolString()));
                 } else {
                     addReportInsufficientFunds(campaign, resourceMap.getString("OverheadCosts.text"));
+                }
+            }
+
+            // Handle Hot Spots upkeep
+            // A force with no Scale owes no upkeep, so there is nothing to charge or report
+            Money hotSpotsUpkeepCost = campaignOptions.get(CampaignOption.PAY_FOR_HOT_SPOTS_UPKEEP)
+                                             ? accountant.getHotSpotsUpkeepCosts()
+                                             : Money.zero();
+            if (hotSpotsUpkeepCost.isPositive()) {
+                if (debit(TransactionType.MAINTENANCE,
+                      today,
+                      hotSpotsUpkeepCost,
+                      getTextAt(RESOURCE_BUNDLE, "HotSpotsUpkeep.title"))) {
+                    campaign.addReport(FINANCES, getFormattedTextAt(RESOURCE_BUNDLE, "HotSpotsUpkeep.text",
+                          hotSpotsUpkeepCost.toAmountAndSymbolString()));
+                } else {
+                    addReportInsufficientFunds(campaign, getTextAt(RESOURCE_BUNDLE, "HotSpotsUpkeepCosts.text"));
                 }
             }
 

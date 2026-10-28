@@ -37,8 +37,12 @@ import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.lang.Math.round;
 import static megamek.common.units.Jumpship.DRIVE_CORE_NONE;
+import static mekhq.campaign.enums.CampaignTransportType.SHIP_TRANSPORT;
 import static mekhq.campaign.mission.utilities.TransportCostCalculations.*;
 import static mekhq.campaign.personnel.skills.SkillType.EXP_REGULAR;
+import static mekhq.campaign.unit.enums.TransporterType.HEAVY_VEHICLE_BAY;
+import static mekhq.campaign.unit.enums.TransporterType.LIGHT_VEHICLE_BAY;
+import static mekhq.campaign.unit.enums.TransporterType.SUPER_HEAVY_VEHICLE_BAY;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -57,13 +61,16 @@ import java.lang.reflect.Method;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
 
 import megamek.codeUtilities.MathUtility;
 import megamek.common.units.Entity;
+import megamek.common.units.EntityMovementMode;
 import megamek.common.units.Jumpship;
 import megamek.common.units.SpaceStation;
+import megamek.common.units.Tank;
 import mekhq.campaign.JumpPath;
 import mekhq.campaign.finances.Finances;
 import mekhq.campaign.finances.Money;
@@ -74,7 +81,9 @@ import mekhq.campaign.personnel.enums.PersonnelRole;
 import mekhq.campaign.personnel.enums.PersonnelStatus;
 import mekhq.campaign.unit.CargoStatistics;
 import mekhq.campaign.unit.Unit;
+import mekhq.campaign.unit.enums.TransporterType;
 import mekhq.campaign.universe.PlanetarySystem;
+import mekhq.campaign.utilities.CampaignTransportUtilities;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -405,6 +414,47 @@ public class TransportCostCalculationsTest {
         double expectedCost = 0;
         assertEquals(expectedCost, actualCost,
               "Expected " + expectedCost + " cargo bay cost but was " + actualCost);
+    }
+
+    @Test
+    public void calculateAdditionalBayRequirementsFromUnits_unusedBaysProvideCargoCapacity() {
+        // 2 small craft bays, 1 used by an overflow ASF; 3 Mek bays, 1 used; 2 super heavy bays, both cascading down
+        // to light vehicles with 1 used; 5 ProtoMek slots, 2 used
+        TransportCostCalculations local = calculationsWithUnits(List.of(unitWithSmallCraftCapacity(2),
+              unitWithMekCapacity(3), unitWithSuperHeavyVehicleCapacity(2), unitWithProtoMekCapacity(5)));
+
+        local.setASFCount(1);
+        local.setMekCount(1);
+        local.setLightVehicleCount(1);
+        local.setProtoMekCount(2);
+        local.calculateAdditionalBayRequirementsFromUnits();
+
+        double expectedCapacity = SMALL_CRAFT_BAY_CARGO_TONNAGE +
+                                        2 * MEK_BAY_CARGO_TONNAGE +
+                                        SUPER_HEAVY_VEHICLE_BAY_CARGO_TONNAGE +
+                                        3 * PROTOMEK_BAY_CARGO_TONNAGE;
+        double actualCapacity = local.getSpareBayCargoCapacity();
+        assertEquals(expectedCapacity, actualCapacity,
+              "Expected " + expectedCapacity + " spare bay cargo capacity but was " + actualCapacity);
+    }
+
+    @Test
+    public void calculateCargoRequirements_unusedBaysOffsetCargoShortfall() {
+        TransportCostCalculations local = calculationsWithUnits(List.of(unitWithMekCapacity(2)));
+        local.calculateAdditionalBayRequirementsFromUnits();
+
+        try (MockedStatic<CargoStatistics> mockedCargo = mockStatic(CargoStatistics.class)) {
+            mockedCargo.when(() -> CargoStatistics.getTotalCargoCapacity(ArgumentMatchers.any())).thenReturn(0.0);
+            mockedCargo.when(() -> CargoStatistics.getCargoTonnage(anyCollection(), anyCollection(), eq(false),
+                  eq(false))).thenReturn(150.0);
+            mockedCargo.when(() -> CargoStatistics.getCargoTonnage(anyCollection(), anyCollection(), eq(false),
+                  eq(true))).thenReturn(0.0);
+
+            local.calculateCargoRequirements();
+        }
+
+        assertEquals(0.0, local.getAdditionalCargoSpaceRequired());
+        assertEquals(0, local.getAdditionalDropShipsRequired());
     }
 
     @ParameterizedTest
@@ -1303,6 +1353,7 @@ public class TransportCostCalculationsTest {
         when(mockEntity.isProtoMek()).thenReturn(false);
         when(mockEntity.isBattleArmor()).thenReturn(false);
         when(mockEntity.isInfantry()).thenReturn(true);
+        when(mockEntity.getMovementMode()).thenReturn(EntityMovementMode.INF_LEG);
 
         Collection<Unit> units = new ArrayList<>();
         for (int i = 0; i < unitCount; i++) {
@@ -1333,6 +1384,7 @@ public class TransportCostCalculationsTest {
 
         Entity infantryEntity = mock(Entity.class);
         when(infantryEntity.isInfantry()).thenReturn(true);
+        when(infantryEntity.getMovementMode()).thenReturn(EntityMovementMode.INF_LEG);
         Unit infantry = unitWithEntity(infantryEntity);
 
         TransportCostCalculations local = calculationsWithUnits(List.of(carrier, infantry));
@@ -1461,6 +1513,38 @@ public class TransportCostCalculationsTest {
         int countedLightVehicles = local.getLightVehicleCount();
         assertEquals(unitCount, countedLightVehicles,
               "Expected " + unitCount + " units but was " + countedLightVehicles);
+    }
+
+    /**
+     * Jump costs charge for a vehicle bay based on the vehicle's weight, so the vehicle must actually be loadable into
+     * that bay type when assigning ship transport.
+     */
+    @ParameterizedTest
+    @ValueSource(doubles = { 25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 175.0, 200.0 })
+    public void testCountUnitsByType_vehicleBucketMatchesShipTransportBays(double weight) {
+        Unit mockUnit = mock(Unit.class);
+        Tank mockTank = mock(Tank.class);
+        when(mockUnit.getEntity()).thenReturn(mockTank);
+        when(mockTank.isVehicle()).thenReturn(true);
+        when(mockTank.getWeight()).thenReturn(weight);
+
+        TransportCostCalculations local = new TransportCostCalculations(List.of(mockUnit), new ArrayList<>(),
+              new ArrayList<>(), EXP_REGULAR);
+        local.countUnitsByType();
+
+        TransporterType expectedBay;
+        if (local.getSuperHeavyVehicleCount() == 1) {
+            expectedBay = SUPER_HEAVY_VEHICLE_BAY;
+        } else if (local.getHeavyVehicleCount() == 1) {
+            expectedBay = HEAVY_VEHICLE_BAY;
+        } else {
+            expectedBay = LIGHT_VEHICLE_BAY;
+        }
+
+        EnumSet<TransporterType> shipTransporters = CampaignTransportUtilities.mapICarryableToTransporters(
+              SHIP_TRANSPORT, mockTank);
+        assertTrue(shipTransporters.contains(expectedBay),
+              "A " + weight + "t vehicle is charged for a " + expectedBay + " but can't be loaded into one");
     }
 
     @ParameterizedTest

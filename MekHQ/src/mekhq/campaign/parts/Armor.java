@@ -44,8 +44,8 @@ import java.io.PrintWriter;
 import java.text.DecimalFormat;
 import java.util.Objects;
 
+import jakarta.annotation.Nullable;
 import megamek.common.TechAdvancement;
-import megamek.common.annotations.Nullable;
 import megamek.common.enums.AvailabilityValue;
 import megamek.common.enums.Faction;
 import megamek.common.equipment.ArmorType;
@@ -64,7 +64,6 @@ import mekhq.campaign.parts.enums.PartRepairType;
 import mekhq.campaign.parts.missing.MissingPart;
 import mekhq.campaign.personnel.skills.SkillType;
 import mekhq.campaign.work.IAcquisitionWork;
-import mekhq.campaign.work.WorkTime;
 import mekhq.utilities.MHQXMLUtility;
 import mekhq.utilities.ReportingUtilities;
 import org.w3c.dom.Node;
@@ -108,6 +107,15 @@ public class Armor extends Part implements IAcquisitionWork {
             return "Armor (" + (clan ? "Clan " : "IS ") + ArmorType.of(type, clan).getName() + ')';
         }
         return "Armor";
+    }
+
+    /**
+     * Armor builds its name from its type instead of storing it, so reports that ask for the part's name, such as a
+     * repair line in the daily report, get the name the warehouse shows rather than "Unknown".
+     */
+    @Override
+    public String getPartName() {
+        return getName();
     }
 
     @Override
@@ -165,15 +173,7 @@ public class Armor extends Part implements IAcquisitionWork {
         toReturn.append("</b><br/>").append(getDetails()).append("<br/>");
 
         if (getSkillMin() <= SkillType.EXP_LEGENDARY) {
-            toReturn.append(getTimeLeft())
-                  .append(" minutes")
-                  .append(null != getTech() ? " (scheduled)" : "")
-                  .append(" <b>TN:</b> ")
-                  .append(getAllMods(null).getValue() > -1 ? "+" : "")
-                  .append(getAllMods(null).getValueAsString());
-            if (getMode() != WorkTime.NORMAL) {
-                toReturn.append(" <i>").append(getCurrentModeName()).append("</i>");
-            }
+            toReturn.append(getTimeAndTargetText());
         }
         toReturn.append("</html>");
         return toReturn.toString();
@@ -208,7 +208,7 @@ public class Armor extends Part implements IAcquisitionWork {
                 toReturn.append(messageSurroundedBySpanWithColor(getNegativeColor(),
                       "None in stock"));
             } else if (!isSalvaging()) {
-                if (amountAvailable < amountNeeded) {
+                if (amountAvailable < getAmountNeededInWarehousePoints()) {
                     toReturn.append(spanOpeningWithCustomColor(getNegativeColor()))
                           .append("Only ")
                           .append(amountAvailable)
@@ -297,7 +297,9 @@ public class Armor extends Part implements IAcquisitionWork {
 
     @Override
     public boolean isSameStatus(Part part) {
-        return this.getDaysToArrival() == part.getDaysToArrival();
+        boolean isArrivingTogether = getDaysToArrival() == part.getDaysToArrival();
+        boolean isSameQuality = getQuality() == part.getQuality();
+        return isArrivingTogether && isSameQuality;
     }
 
     @Override
@@ -361,17 +363,12 @@ public class Armor extends Part implements IAcquisitionWork {
 
     @Override
     public void fix() {
-        if (unit.getEntity().isCapitalScale()) {
-            amountNeeded *= 10;
-        }
-        int amountFound = Math.min(getAmountAvailable(), amountNeeded);
-        int fixAmount = Math.min(amount +
-                                       // Make sure that we handle the capital scale conversion when setting the fix
-                                       // amount
-                                       (unit.getEntity().isCapitalScale() ? (amountFound / 10) : amountFound),
-              unit.getEntity().getOArmor(location, rear));
-        unit.getEntity().setArmor(fixAmount, location, rear);
-        changeAmountAvailable(-1 * amountFound);
+        Entity entity = unit.getEntity();
+        int pointsRepaired = getPointsRepairableFromStock();
+        int fixAmount = Math.min(amount + pointsRepaired, entity.getOArmor(location, rear));
+        entity.setArmor(fixAmount, location, rear);
+        // Only the stock for the points actually put on is used: ten standard points per capital point
+        changeAmountAvailable(-1 * toWarehousePoints(entity, pointsRepaired));
         updateConditionFromEntity(false);
         skillMin = SkillType.EXP_GREEN;
         shorthandedMod = 0;
@@ -381,6 +378,7 @@ public class Armor extends Part implements IAcquisitionWork {
     public String find(int transitDays, double valueMultiplier) {
         Part newPart = getNewPart();
         newPart.setBrandNew(true);
+        newPart.setOrderedAheadForUnitId(getOrderedAheadForUnitId());
         newPart.setDaysToArrival(transitDays);
         // Deliver to this order's own warehouse — a base warehouse for a base order, or the campaign warehouse for the
         // main force.
@@ -447,6 +445,28 @@ public class Armor extends Part implements IAcquisitionWork {
         return entity.isCapitalScale() ? (armorPoints * 10) : armorPoints;
     }
 
+    /**
+     * @return the armor this location still needs, counted in the standard points the warehouse uses
+     */
+    private int getAmountNeededInWarehousePoints() {
+        return hasEntity() ? toWarehousePoints(unit.getEntity(), amountNeeded) : amountNeeded;
+    }
+
+    private boolean hasEntity() {
+        return (unit != null) && (unit.getEntity() != null);
+    }
+
+    /**
+     * @return how many of the points this location needs can be put on from the armor in stock, counted as the unit
+     *       counts them; for capital-scale armor, every ten standard points in stock make one capital point
+     */
+    private int getPointsRepairableFromStock() {
+        int amountAvailable = getAmountAvailable();
+        boolean isCapitalScale = hasEntity() && unit.getEntity().isCapitalScale();
+        int pointsInStock = isCapitalScale ? (amountAvailable / 10) : amountAvailable;
+        return Math.min(amountNeeded, pointsInStock);
+    }
+
     public int getBaseTimeFor(Entity entity) {
         if (entity == null) {
             return 5;
@@ -492,7 +512,7 @@ public class Armor extends Part implements IAcquisitionWork {
         if (isSalvaging()) {
             return getBaseTimeFor(entity) * amount;
         }
-        return getBaseTimeFor(entity) * Math.min(amountNeeded, getAmountAvailable());
+        return getBaseTimeFor(entity) * getPointsRepairableFromStock();
     }
 
     @Override
@@ -632,7 +652,7 @@ public class Armor extends Part implements IAcquisitionWork {
     }
 
     public boolean isEnoughSpareArmorAvailable() {
-        return getAmountAvailable() >= amountNeeded;
+        return getAmountAvailable() >= getAmountNeededInWarehousePoints();
     }
 
     /**
@@ -690,11 +710,7 @@ public class Armor extends Part implements IAcquisitionWork {
                 remove(false);
             } else {
                 skillMin = SkillType.EXP_GREEN;
-                if ((unit != null) && (unit.getEntity() != null) && (unit.getEntity().isCapitalScale())) {
-                    changeAmountAvailable(-1 * (amountNeeded * 10));
-                } else {
-                    changeAmountAvailable(-1 * amountNeeded);
-                }
+                changeAmountAvailable(-1 * getAmountNeededInWarehousePoints());
             }
         }
         return " <font color='" +
@@ -713,7 +729,7 @@ public class Armor extends Part implements IAcquisitionWork {
 
     @Override
     public boolean isInSupply() {
-        return amountNeeded <= getAmountAvailable();
+        return getAmountNeededInWarehousePoints() <= getAmountAvailable();
     }
 
     @Override

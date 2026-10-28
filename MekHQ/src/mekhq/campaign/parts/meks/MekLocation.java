@@ -33,6 +33,8 @@
  */
 package mekhq.campaign.parts.meks;
 
+import static mekhq.utilities.MHQInternationalization.getFormattedTextAt;
+
 import java.io.PrintWriter;
 import java.util.HashSet;
 import java.util.Objects;
@@ -40,13 +42,12 @@ import java.util.Set;
 import java.util.StringJoiner;
 import java.util.stream.IntStream;
 
+import jakarta.annotation.Nullable;
 import megamek.common.CriticalSlot;
 import megamek.common.TechAdvancement;
-import megamek.common.annotations.Nullable;
 import megamek.common.equipment.EquipmentType;
 import megamek.common.equipment.IArmorState;
 import megamek.common.equipment.MiscType;
-import megamek.common.equipment.Mounted;
 import megamek.common.interfaces.ILocationExposureStatus;
 import megamek.common.rolls.TargetRoll;
 import megamek.common.units.Entity;
@@ -59,6 +60,7 @@ import megamek.logging.MMLogger;
 import mekhq.campaign.Campaign;
 import mekhq.campaign.campaignOptions.CampaignOption;
 import mekhq.campaign.finances.Money;
+import mekhq.campaign.finances.RepairCosts;
 import mekhq.campaign.parts.Part;
 import mekhq.campaign.parts.enums.PartRepairType;
 import mekhq.campaign.parts.equipment.EquipmentPart;
@@ -67,8 +69,8 @@ import mekhq.campaign.parts.missing.MissingLandingGear;
 import mekhq.campaign.parts.missing.MissingMekLocation;
 import mekhq.campaign.personnel.Person;
 import mekhq.campaign.personnel.skills.SkillType;
+import mekhq.campaign.unit.SlotMounts;
 import mekhq.campaign.unit.Unit;
-import mekhq.campaign.work.WorkTime;
 import mekhq.utilities.MHQXMLUtility;
 import mekhq.utilities.ReportingUtilities;
 import org.w3c.dom.Node;
@@ -79,6 +81,7 @@ import org.w3c.dom.NodeList;
  */
 public class MekLocation extends Part {
     private static final MMLogger LOGGER = MMLogger.create(MekLocation.class);
+    private static final String RESOURCE_BUNDLE = "mekhq.resources.Parts";
 
     protected int loc;
     protected int structureType;
@@ -395,10 +398,7 @@ public class MekLocation extends Part {
                 }
 
                 slot.setMissing(false);
-                Mounted<?> m = slot.getMount();
-                if (null != m) {
-                    m.setMissing(false);
-                }
+                SlotMounts.forEach(slot, mount -> mount.setMissing(false));
             }
         } else if ((unit != null) && isBreached()) {
             setBreached(false);
@@ -412,10 +412,7 @@ public class MekLocation extends Part {
                 }
 
                 slot.setBreached(false);
-                Mounted<?> m = slot.getMount();
-                if (null != m) {
-                    m.setBreached(false);
-                }
+                SlotMounts.forEach(slot, mount -> mount.setBreached(false));
             }
         } else {
             setPercent(1.0);
@@ -669,9 +666,7 @@ public class MekLocation extends Part {
             } else if (getPercent() < 1.0) {
                 toReturn.append(" (").append(Math.round(100 * getPercent())).append("%)");
                 if (campaign.getCampaignOptions().get(CampaignOption.PAY_FOR_REPAIRS)) {
-                    toReturn.append(", ")
-                          .append(getUndamagedValue().multipliedBy(0.2).toAmountAndSymbolString())
-                          .append(" to repair");
+                    toReturn.append(", ").append(getFormattedTextAt(RESOURCE_BUNDLE, "Part.repairCost.details", getRepairCost().multipliedBy(RepairCosts.getRepairCostMultiplier(campaign, unit)).toAmountAndSymbolString()));
                 }
             }
         }
@@ -692,13 +687,12 @@ public class MekLocation extends Part {
                     slot.setHit(false);
                     slot.setRepairable(true);
                     slot.setMissing(false);
-                    Mounted<?> m = slot.getMount();
-                    if (m != null) {
-                        m.setHit(false);
-                        m.setDestroyed(false);
-                        m.setMissing(false);
-                        m.setRepairable(true);
-                    }
+                    SlotMounts.forEach(slot, mount -> {
+                        mount.setHit(false);
+                        mount.setDestroyed(false);
+                        mount.setMissing(false);
+                        mount.setRepairable(true);
+                    });
                 }
             }
         }
@@ -849,6 +843,12 @@ public class MekLocation extends Part {
         return (loc != Mek.LOC_CENTER_TORSO) && super.isSalvaging();
     }
 
+    /** A Mek's centre torso can never be scrapped, so it can never be replaced either. */
+    @Override
+    public boolean isReplaceable() {
+        return loc != Mek.LOC_CENTER_TORSO;
+    }
+
     @Override
     public String checkScrappable() {
         // Can't scrap a center torso
@@ -951,15 +951,11 @@ public class MekLocation extends Part {
               .append("<br/>");
 
         if (getSkillMin() <= SkillType.EXP_LEGENDARY) {
-            toReturn.append(getTimeLeft()).append(" minutes").append(null != getTech() ? " (scheduled)" : "");
+            toReturn.append(getTimeLeftText());
             if (isBlownOff()) {
-                toReturn.append(" <b>TN:</b> ")
-                      .append(getAllMods(null).getValue() > -1 ? "+" : "")
-                      .append(getAllMods(null).getValueAsString());
+                toReturn.append(' ').append(getTargetNumberText());
             }
-            if (getMode() != WorkTime.NORMAL) {
-                toReturn.append(" <i>").append(getCurrentModeName()).append("</i>");
-            }
+            toReturn.append(getWorkModeText());
         }
         toReturn.append("</html>");
         return toReturn.toString();
@@ -1016,10 +1012,15 @@ public class MekLocation extends Part {
     }
 
     @Override
+    public boolean canTakeMaintenanceDamage() {
+        return (getUnit() != null) && (getUnit().getEntity().getInternal(getLoc()) >= 1);
+    }
+
+    @Override
     public void doMaintenanceDamage(int d) {
         if ((getUnit() != null) && (d > 0)) {
             int points = getUnit().getEntity().getInternal(getLoc());
-            getUnit().getEntity().setInternal(Math.max(points - d, 1), getLoc());
+            getUnit().getEntity().setInternal(getStructureAfterMaintenanceDamage(points, d), getLoc());
             updateConditionFromEntity(false);
         }
     }
@@ -1033,6 +1034,19 @@ public class MekLocation extends Part {
     @Override
     public int getLocation() {
         return Entity.LOC_NONE;
+    }
+
+    /**
+     * A location reports no location of its own through {@link #getLocation()}, so the Repair tab's location filter
+     * compares the location this part stands for instead. Filtering to "LA" then shows the left arm's own repair.
+     */
+    @Override
+    public boolean isInLocation(String locationAbbreviation) {
+        boolean hasEntity = (unit != null) && (unit.getEntity() != null);
+        if (!hasEntity) {
+            return false;
+        }
+        return getLoc() == unit.getEntity().getLocationFromAbbr(locationAbbreviation);
     }
 
     @Override

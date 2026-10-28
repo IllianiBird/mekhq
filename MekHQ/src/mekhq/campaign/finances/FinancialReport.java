@@ -66,8 +66,10 @@ public class FinancialReport {
     private Money maintenance = Money.zero();
     private Money salaries = Money.zero();
     private Money overhead = Money.zero();
+    private Money hotSpotsUpkeep = Money.zero();
     private Money contracts = Money.zero();
     private Money rentals = Money.zero();
+    private Money foodAndHousing = Money.zero();
 
     public Money getNetWorth() {
         return getTotalAssets().minus(getTotalLiabilities());
@@ -87,7 +89,14 @@ public class FinancialReport {
     }
 
     public Money getMonthlyExpenses() {
-        return maintenance.plus(salaries).plus(overhead).plus(coSpareParts).plus(coAmmo).plus(coFuel).plus(rentals);
+        return maintenance.plus(salaries)
+                     .plus(overhead)
+                     .plus(hotSpotsUpkeep)
+                     .plus(coSpareParts)
+                     .plus(coAmmo)
+                     .plus(coFuel)
+                     .plus(rentals)
+                     .plus(foodAndHousing);
     }
 
     public Money getCash() {
@@ -104,6 +113,16 @@ public class FinancialReport {
 
     public Money getOverheadCosts() {
         return overhead;
+    }
+
+    /**
+     * @return the monthly Hot Spots upkeep cost
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public Money getHotSpotsUpkeepCosts() {
+        return hotSpotsUpkeep;
     }
 
     public Money getSalaries() {
@@ -162,6 +181,8 @@ public class FinancialReport {
         return rentals;
     }
 
+    public Money getFoodAndHousing() {return foodAndHousing;}
+
     public static FinancialReport calculate(Campaign campaign) {
         FinancialReport financialReport = new FinancialReport();
 
@@ -199,16 +220,19 @@ public class FinancialReport {
         CampaignOptions campaignOptions = campaign.getCampaignOptions();
         Accountant accountant = campaign.getAccountant();
 
-        if (campaignOptions.get(CampaignOption.PAY_FOR_MAINTAIN)) {
+        if (campaignOptions.isChargingMaintenance()) {
             financialReport.maintenance = accountant.getWeeklyMaintenanceCosts().multipliedBy(4);
         }
         if (campaignOptions.get(CampaignOption.PAY_FOR_SALARIES)) {
             financialReport.salaries = accountant.getPayRoll();
         }
-        if (campaignOptions.get(CampaignOption.PAY_FOR_OVERHEAD)) {
+        if (campaignOptions.isChargingOverhead()) {
             financialReport.overhead = accountant.getOverheadExpenses();
         }
-        if (campaignOptions.get(CampaignOption.USE_PEACETIME_COST)) {
+        if (campaignOptions.get(CampaignOption.PAY_FOR_HOT_SPOTS_UPKEEP)) {
+            financialReport.hotSpotsUpkeep = accountant.getHotSpotsUpkeepCosts();
+        }
+        if (campaignOptions.isChargingPeacetimeCost()) {
             financialReport.coSpareParts = accountant.getMonthlySpareParts();
             financialReport.coAmmo = accountant.getMonthlyAmmo();
             financialReport.coFuel = accountant.getMonthlyFuel();
@@ -218,6 +242,10 @@ public class FinancialReport {
               campaign.getActiveContracts()
                     .stream().map(AbstractContract::getMonthlyPayOut)
                     .collect(Collectors.toList()));
+
+        if (campaignOptions.get(CampaignOption.PAY_FOR_FOOD) || campaignOptions.get(CampaignOption.PAY_FOR_HOUSING)) {
+            financialReport.foodAndHousing = accountant.getMonthlyFoodAndHousingExpenses();
+        }
 
         return financialReport;
     }

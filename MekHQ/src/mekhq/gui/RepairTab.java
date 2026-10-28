@@ -55,13 +55,13 @@ import javax.swing.text.DefaultCaret;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
 
+import jakarta.annotation.Nullable;
 import megamek.client.ui.entityreadout.EntityReadout;
 import megamek.client.ui.models.XTableColumnModel;
 import megamek.client.ui.preferences.JTablePreference;
 import megamek.client.ui.preferences.PreferencesNode;
 import megamek.client.ui.util.UIUtil;
 import megamek.client.ui.util.ViewFormatting;
-import megamek.common.annotations.Nullable;
 import megamek.common.event.Subscribe;
 import megamek.common.rolls.TargetRoll;
 import megamek.common.ui.FastJScrollPane;
@@ -73,6 +73,7 @@ import mekhq.campaign.digitalGM.stratCon.StratConRulesManager;
 import mekhq.campaign.events.AcquisitionEvent;
 import mekhq.campaign.events.AsTechPoolChangedEvent;
 import mekhq.campaign.events.DeploymentChangedEvent;
+import mekhq.campaign.events.OrganizationChangedEvent;
 import mekhq.campaign.events.OvertimeModeEvent;
 import mekhq.campaign.events.ProcurementEvent;
 import mekhq.campaign.events.RepairStatusChangedEvent;
@@ -82,17 +83,13 @@ import mekhq.campaign.events.parts.PartWorkEvent;
 import mekhq.campaign.events.persons.PersonEvent;
 import mekhq.campaign.events.scenarios.ScenarioResolvedEvent;
 import mekhq.campaign.events.units.UnitEvent;
-import mekhq.campaign.location.ILocation;
-import mekhq.campaign.location.LocationUtils;
 import mekhq.campaign.parts.Part;
 import mekhq.campaign.parts.PodSpace;
 import mekhq.campaign.personnel.Person;
-import mekhq.campaign.personnel.quartermaster.EquipmentKitCatalog;
-import mekhq.campaign.personnel.skills.Skill;
-import mekhq.campaign.personnel.skills.SkillModifierData;
-import mekhq.campaign.personnel.skills.SkillType;
 import mekhq.campaign.unit.Unit;
 import mekhq.campaign.work.IPartWork;
+import mekhq.campaign.work.RepairTechEligibility;
+import mekhq.campaign.work.RepairTechEligibility.TechListToggles;
 import mekhq.gui.adapter.ServicedUnitsTableMouseAdapter;
 import mekhq.gui.adapter.TaskTableMouseAdapter;
 import mekhq.gui.baseComponents.roundedComponents.RoundedJButton;
@@ -118,6 +115,7 @@ import mekhq.service.mrms.MRMSService;
  * Shows damaged units and controls for repair.
  */
 public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
+    private static final int TECH_ROW_HEIGHT = 75;
     private static final MMLogger LOGGER = MMLogger.create(RepairTab.class);
 
     private JTable servicedUnitTable;
@@ -261,6 +259,7 @@ public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
                       (i != UnitTableModel.COL_TYPE) &&
                       (i != UnitTableModel.COL_STATUS) &&
                       (i != UnitTableModel.COL_REPAIR) &&
+                      (i != UnitTableModel.COL_REPAIR_TIME) &&
                       (i != UnitTableModel.COL_SITE) &&
                       (i != UnitTableModel.COL_MODE)) {
                 ((XTableColumnModel) servicedUnitTable.getColumnModel()).setColumnVisible(column, false);
@@ -301,7 +300,8 @@ public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
 
         techsModel = new TechTableModel(getCampaignGui(), this);
         techTable = new JTable(techsModel);
-        techTable.setRowHeight(UIUtil.scaleForGUI(60));
+        // Tall enough for a tech's name, skills, repair abilities and day
+        techTable.setRowHeight(UIUtil.scaleForGUI(TECH_ROW_HEIGHT));
         techTable.getColumnModel().getColumn(0).setCellRenderer(techsModel.getRenderer());
         techTable.getSelectionModel().addListSelectionListener(this::techTableValueChanged);
         techSorter = new TableRowSorter<>(techsModel);
@@ -576,7 +576,6 @@ public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
                 }
             }
         }
-        ((TechSorter) techSorter.getComparator(0)).clearPart();
 
         if (null != target) {
             btnDoTask.setEnabled(target.getValue() != TargetRoll.IMPOSSIBLE);
@@ -596,9 +595,9 @@ public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
      */
     @Override
     public void refreshAll() {
+        // Refreshing the serviced unit list also rebuilds the parts acquisition list.
         refreshServicedUnitList();
         refreshTaskList();
-        refreshPartsAcquisition();
         refreshTechsList();
         refreshOvertimeStatus();
     }
@@ -805,87 +804,22 @@ public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
     public void filterTechs() {
         final IPartWork part = getSelectedTask();
         final Unit unit = getSelectedServicedUnit();
+        final TechListToggles toggles = new TechListToggles(btnShowOnlyUnitTechs.isSelected(),
+              btnShowAllTechs.isSelected());
         RowFilter<TechTableModel, Integer> techTypeFilter = new RowFilter<>() {
             @Override
             public boolean include(Entry<? extends TechTableModel, ? extends Integer> entry) {
                 if (part == null) {
                     return false;
-                } else if (!part.needsFixing() && !part.isSalvaging()) {
-                    return false;
                 }
-                TechTableModel techModel = entry.getModel();
-                Person tech = techModel.getTechAt(entry.getIdentifier());
-                // Tech must be at the same location as the unit being repaired
-                ILocation repairTarget = (unit != null) ?
-                                               unit
-                                               :
-                                               (part instanceof Part partWithUnit && partWithUnit.getUnit() != null) ?
-                                                     partWithUnit.getUnit() :
-                                               (ILocation) part;
-                if (!LocationUtils.areSameEffectiveLocation(tech, repairTarget)) {
-                    return false;
-                }
-
-                // Vessel crew assigned to a large craft can only perform repairs as that unit's engineer.
-                Unit assignedUnit = tech.getUnit();
-                if (tech.getPrimaryRole().isVesselCrew() &&
-                          assignedUnit != null &&
-                          assignedUnit.getEntity() != null &&
-                          assignedUnit.getEntity().isLargeCraft() &&
-                          !tech.equals(assignedUnit.getEngineer())) {
-                    return false;
-                }
-                if (btnShowOnlyUnitTechs.isSelected() && (unit != null) && !tech.isRightTechProfessionFor(unit)) {
-                    return false;
-                }
-                // Every tech, including a self-crewed unit's engineer, must hold the skill the task requires and,
-                // where the campaign demands one, a tool kit - regardless of the filter toggles
-                if (!tech.isRightTechTypeFor(part)) {
-                    return false;
-                }
-                if (EquipmentKitCatalog.isToolKitRequired(getCampaignOptions(), unit) &&
-                          !EquipmentKitCatalog.hasToolKit(tech)) {
-                    return false;
-                }
-                if ((unit != null) && unit.isSelfMaintainedInfantry()) {
-                    // Self-maintaining infantry repair their own gear, led by the unit's engineer (its ranking
-                    // soldier), who is the only person the repair is actually attributed to
-                    if (!tech.equals(unit.getEngineer())) {
-                        return false;
-                    }
-                } else if ((unit != null) && unit.isSelfCrewed()) {
-                    // Only the vessel crew assigned to this unit may work on it; they then face the same skill-level
-                    // and time checks as any other tech below
-                    if (!tech.getPrimaryRole().isVesselCrew() || !unit.equals(tech.getUnit())) {
-                        return false;
-                    }
-                } else if (tech.getPrimaryRole().isVesselCrew() && (unit != null) && !unit.isSelfCrewed()) {
-                    return false;
-                } else if (!btnShowAllTechs.isSelected() && !tech.isTechExpanded()) {
-                    // Otherwise only personnel in a technician role are offered
-                    return false;
-                }
-                Skill skill = tech.getSkillForWorkingOn(part);
-                int modePenalty = part.getMode().expReduction;
-                if (skill == null) {
-                    return false;
-                } else if (part.getSkillMin() > SkillType.EXP_LEGENDARY) {
-                    return false;
-                } else if (tech.getMinutesLeft() <= 0) {
-                    return false;
-                } else {
-                    SkillModifierData skillModifierData = tech.getSkillModifierData();
-                    return getCampaign().getCampaignOptions().get(CampaignOption.DESTROY_BY_MARGIN) ||
-                                 (part.getSkillMin() <=
-                                        (skill.getExperienceLevel(skillModifierData) -
-                                               modePenalty));
-                }
+                Person tech = entry.getModel().getTechAt(entry.getIdentifier());
+                return RepairTechEligibility.findRefusal(getCampaign(), part, unit, tech, toggles) == null;
             }
         };
 
-        if (getCampaignOptions().get(CampaignOption.ASSIGNED_TECH_FIRST)) {
-            ((TechSorter) techSorter.getComparator(0)).setPart(part);
-        }
+        TechSorter sorter = (TechSorter) techSorter.getComparator(0);
+        sorter.setPart(part);
+        sorter.setAssignedFirst(getCampaignOptions().get(CampaignOption.ASSIGNED_TECH_FIRST));
         techSorter.setRowFilter(techTypeFilter);
     }
 
@@ -913,6 +847,15 @@ public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
     }
 
     public void refreshServicedUnitList() {
+        // While a bulk generation is adding units/parts off the EDT, skip this refresh: the serviceable check
+        // iterates every unit's part list, which the worker is concurrently appending to - reading it here threw
+        // ConcurrentModificationException from the modal progress dialog's event pump. The generation fires an
+        // OrganizationChangedEvent when it completes, which reschedules this refresh against the finished campaign.
+        if (getCampaign().isBulkGenerationInProgress()) {
+            LOGGER.debug("[CompanyGen] repair serviced unit refresh skipped - bulk generation in progress");
+            return;
+        }
+
         UUID uuid = (getSelectedServicedUnit() != null) ? getSelectedServicedUnit().getId() : null;
 
         LocationFilterItem locationFilter = getCampaignGui().getActiveLocation();
@@ -1020,6 +963,12 @@ public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
      *                                  prevented by validating indices against updated row counts.
      */
     private void refreshTechsList() {
+        // Gathering techs walks the personnel roster, which a bulk generation grows off the EDT; the
+        // OrganizationChangedEvent fired when it completes reschedules this refresh.
+        if (getCampaign().isBulkGenerationInProgress()) {
+            return;
+        }
+
         int selected = techTable.getSelectedRow();
         // Offer anyone with a technician repair skill, regardless of their profession, who has more than 0 minutes
         // free; sorted by skill descending (elites at bottom). The task's required-skill filtering is applied in
@@ -1091,6 +1040,13 @@ public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
     }
 
     public void refreshPartsAcquisitionService(boolean rebuildPartsList) {
+        // Rebuilding walks every unit's parts, which a bulk generation is mutating off the EDT; the
+        // OrganizationChangedEvent fired when it completes triggers the rebuild instead.
+        if (rebuildPartsList && getCampaign().isBulkGenerationInProgress()) {
+            LOGGER.debug("[CompanyGen] repair parts acquisition refresh skipped - bulk generation in progress");
+            return;
+        }
+
         if (rebuildPartsList) {
             PartsAcquisitionService.buildPartsList(getCampaign());
         }
@@ -1111,6 +1067,21 @@ public final class RepairTab extends CampaignGuiTab implements ITechWorkPanel {
     @Subscribe
     public void handle(ScenarioResolvedEvent ev) {
         servicedUnitListScheduler.schedule();
+    }
+
+    /**
+     * A force generation adds its units and parts while {@link Campaign#isBulkGenerationInProgress()} is true, so the
+     * refreshes it triggers are dropped by the guards in {@link #refreshServicedUnitList()} and
+     * {@link #refreshTechsList()}. Generation ends by firing this event, so this handler runs those refreshes (the
+     * serviced unit refresh also rebuilds the task list and parts acquisition) against the finished campaign.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    @Subscribe
+    public void handle(OrganizationChangedEvent ev) {
+        servicedUnitListScheduler.schedule();
+        techsScheduler.schedule();
     }
 
     @Subscribe

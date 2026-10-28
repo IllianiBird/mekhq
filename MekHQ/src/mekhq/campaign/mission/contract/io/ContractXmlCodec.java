@@ -112,7 +112,11 @@ public final class ContractXmlCodec {
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "nameIsOperationCodename",
               contract.isNameOperationCodename());
         writeStringIfPresent(printWriter, indent, "description", contract.getDescription());
-        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "scale", contract.getScale());
+        MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "scale", contract.getExactScale());
+        if (contract.getSalvageTaperMultiplier() != 1.0) {
+            MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvageTaperMultiplier",
+                  contract.getSalvageTaperMultiplier());
+        }
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "requiredVictoryPoints",
               contract.getRequiredVictoryPoints());
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "trackCount", contract.getTrackCount());
@@ -137,6 +141,10 @@ public final class ContractXmlCodec {
         }
         if (contract.getStatus() != null) {
             MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "missionStatus", contract.getStatus().name());
+        }
+        if (contract.getMandatedCompletionStatus() != null) {
+            MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "mandatedCompletionStatus",
+                  contract.getMandatedCompletionStatus().name());
         }
         // Running salvage totals, accumulated across the contract's scenarios.
         MHQXMLUtility.writeSimpleXMLTag(printWriter, indent, "salvagedByUnitValue", contract.getSalvagedByUnitValue());
@@ -427,7 +435,10 @@ public final class ContractXmlCodec {
         readers.put("nameIsOperationCodename",
               (contract, node, campaign, version) -> contract.setNameOperationCodename(Boolean.parseBoolean(text(node))));
         readers.put("description", (contract, node, campaign, version) -> contract.setDescription(text(node)));
-        readers.put("scale", (contract, node, campaign, version) -> contract.setScale(parseInt(node)));
+        readers.put("scale",
+              (contract, node, campaign, version) -> contract.setScale(MathUtility.parseDouble(text(node), 0.0)));
+        readers.put("salvageTaperMultiplier", (contract, node, campaign, version) ->
+              contract.setSalvageTaperMultiplier(MathUtility.parseDouble(text(node), 1.0)));
         readers.put("requiredVictoryPoints",
               (contract, node, campaign, version) -> contract.setRequiredVictoryPoints(parseInt(node)));
         readers.put("trackCount", (contract, node, campaign, version) -> contract.setTrackCount(parseInt(node)));
@@ -447,6 +458,9 @@ public final class ContractXmlCodec {
               (contract, node, campaign, version) -> contract.setConsecutiveTrackResultTally(parseInt(node)));
         readers.put("missionStatus",
               (contract, node, campaign, version) -> contract.setStatus(MissionStatus.parseFromString(text(node))));
+        readers.put("mandatedCompletionStatus",
+              (contract, node, campaign, version) -> contract.setMandatedCompletionStatus(
+                    MissionStatus.parseFromString(text(node))));
         readers.put("salvagedByUnitValue",
               (contract, node, campaign, version) -> contract.setSalvagedByUnitValue(Money.fromXmlString(text(node))));
         readers.put("salvagedByEmployerValue",

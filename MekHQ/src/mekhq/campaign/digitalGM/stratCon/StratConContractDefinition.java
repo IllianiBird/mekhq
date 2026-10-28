@@ -47,11 +47,13 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import jakarta.annotation.Nullable;
 import jakarta.xml.bind.annotation.XmlElement;
 import jakarta.xml.bind.annotation.XmlElementWrapper;
 import jakarta.xml.bind.annotation.XmlRootElement;
 import megamek.logging.MMLogger;
 import mekhq.MHQConstants;
+import mekhq.campaign.digitalGM.stratCon.facility.StratConContractFacilityProfile;
 import mekhq.campaign.mission.contract.contractData.ContractObjectiveType;
 import mekhq.utilities.MMDataLicenseHeader;
 
@@ -176,20 +178,6 @@ public class StratConContractDefinition {
     private String contractTypeName;
     private String briefing;
 
-    /**
-     * How many allied facilities to generate for the contract, in addition to any facilities placed by objectives. < 0
-     * indicates that the number of facilities should be scaled to the number of lances required by the contract. 0
-     * indicates no additional allied facilities.
-     */
-    private double alliedFacilityCount;
-
-    /**
-     * How many hostile facilities to generate for the contract, in addition to any facilities placed by objectives. -1
-     * indicates that the number of facilities should be scaled to the number of lances required by the contract. 0
-     * indicates no additional hostile facilities.
-     */
-    private double hostileFacilityCount;
-
     private boolean allowEarlyVictory;
 
     /**
@@ -219,9 +207,16 @@ public class StratConContractDefinition {
      */
     private List<PointOfInterestParameters> pointsOfInterest = new ArrayList<>();
 
-    private List<Integer> scenarioOdds;
+    /**
+     * The odds, one picked at random per sector, that a formation deploying to a sector runs into the enemy. Scenario
+     * tempo is not set here: it follows the contract's scale (see {@link StratConScenarioTempo}).
+     */
+    private List<Integer> deploymentEncounterOdds;
 
     private List<Integer> deploymentTimes;
+
+    /** How the contract type lays out its facilities; {@code null} to place them as before. */
+    private StratConContractFacilityProfile facilityProfile;
 
     /**
      * @return the contract type name
@@ -259,34 +254,6 @@ public class StratConContractDefinition {
         this.allowEarlyVictory = allowEarlyVictory;
     }
 
-    /**
-     * @return the alliedFacilityCount
-     */
-    public double getAlliedFacilityCount() {
-        return alliedFacilityCount;
-    }
-
-    /**
-     * @param alliedFacilityCount the alliedFacilityCount to set
-     */
-    public void setAlliedFacilityCount(double alliedFacilityCount) {
-        this.alliedFacilityCount = alliedFacilityCount;
-    }
-
-    /**
-     * @return the hostileFacilityCount
-     */
-    public double getHostileFacilityCount() {
-        return hostileFacilityCount;
-    }
-
-    /**
-     * @param hostileFacilityCount the hostileFacilityCount to set
-     */
-    public void setHostileFacilityCount(double hostileFacilityCount) {
-        this.hostileFacilityCount = hostileFacilityCount;
-    }
-
     @XmlElementWrapper(name = "allowedScenarios")
     @XmlElement(name = "allowedScenario")
     @Deprecated(since = "0.51.0", forRemoval = true)
@@ -321,14 +288,14 @@ public class StratConContractDefinition {
         this.objectiveParameters = objectiveParameters;
     }
 
-    @XmlElementWrapper(name = "scenarioOdds")
-    @XmlElement(name = "scenarioOdds")
-    public List<Integer> getScenarioOdds() {
-        return scenarioOdds;
+    @XmlElementWrapper(name = "deploymentEncounterOdds")
+    @XmlElement(name = "deploymentEncounterOdds")
+    public List<Integer> getDeploymentEncounterOdds() {
+        return deploymentEncounterOdds;
     }
 
-    public void setScenarioOdds(List<Integer> scenarioOdds) {
-        this.scenarioOdds = scenarioOdds;
+    public void setDeploymentEncounterOdds(List<Integer> deploymentEncounterOdds) {
+        this.deploymentEncounterOdds = deploymentEncounterOdds;
     }
 
     @XmlElementWrapper(name = "deploymentTimes")
@@ -339,6 +306,20 @@ public class StratConContractDefinition {
 
     public void setDeploymentTimes(List<Integer> deploymentTimes) {
         this.deploymentTimes = deploymentTimes;
+    }
+
+    /**
+     * @return how the contract type lays out its facilities, or {@code null} to place them as before
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public @Nullable StratConContractFacilityProfile getFacilityProfile() {
+        return facilityProfile;
+    }
+
+    public void setFacilityProfile(@Nullable StratConContractFacilityProfile facilityProfile) {
+        this.facilityProfile = facilityProfile;
     }
 
     public List<String> getGlobalScenarioModifiers() {

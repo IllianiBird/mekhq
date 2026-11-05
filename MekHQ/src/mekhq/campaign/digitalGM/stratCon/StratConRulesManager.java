@@ -167,6 +167,8 @@ import org.apache.commons.math3.util.Pair;
 public class StratConRulesManager {
     private static final String RESOURCE_BUNDLE = "mekhq.resources.StratConRulesManager";
     public final static int BASE_LEADERSHIP_BUDGET = 500;
+    /** The Employer Support spent to recall a deployed formation before its return date. */
+    public static final int RECALL_FORMATION_SUPPORT_POINT_COST = 1;
 
     private static final MMLogger LOGGER = MMLogger.create(StratConRulesManager.class);
 
@@ -174,7 +176,6 @@ public class StratConRulesManager {
     private static final int AUTOMATIC_FACILITY_MODIFIER = 1;
     // a facility your employer holds answers a fight's draw for support only 1 time in this many
     public static final int EMPLOYER_LEND_DIE_SIZE = 2;
-    public static final int INDEPENDENT_COMMAND_RIGHTS_REQUIRED_VICTORY_POINTS = 1;
     // what an enemy counterattack on a facility is fought in; see startCounterattackScenario
     private static final List<String> COUNTERATTACK_SCENARIO_TEMPLATES = List.of("Base Defense.json",
           "Hold Until Relief.json");
@@ -693,8 +694,10 @@ public class StratConRulesManager {
     /**
      * Determines if a given StratCon scenario should be marked as critical within the context of a contract.
      * <p>
-     * This method evaluates the scenario's template, type, and the contract's command rights to decide if the scenario
-     * should be flagged as a "turning point." Turning Point scenarios can cause CVP to be increased or decreased.
+     * Special scenarios, strategic objectives, and combat challenges are never Turning Points. Any other scenario has a
+     * one-in-three chance of being one, whatever the contract's command rights: command rights are felt through
+     * Deployment Orders instead (see {@link StratConDeploymentOrders}). Under House command rights, a Turning Point also
+     * brings the House commander's attached units. Turning Point scenarios can cause CVP to be increased or decreased.
      * </p>
      *
      * @param contract          The {@link AbstractContract} representing the current contract.
@@ -713,28 +716,10 @@ public class StratConRulesManager {
             return;
         }
 
-        ContractCommandRights commandRights = contract.getCommandRights();
-        switch (commandRights) {
-            case INTEGRATED -> scenario.setTurningPoint(true);
-            case HOUSE -> {
-                if (randomInt(3) == 0) {
-                    scenario.setTurningPoint(true);
-                    setAttachedUnitsModifier(scenario, contract);
-                }
-            }
-            case LIAISON -> {
-                if (randomInt(3) == 0) {
-                    scenario.setTurningPoint(true);
-                }
-            }
-            case INDEPENDENT -> {
-                // Victory points only exist on a StratCon campaign state; treat a non-StratCon contract as having
-                // none, so it still qualifies as a turning point.
-                StratConCampaignState campaignState = contract.getStratConCampaignState();
-                int victoryPoints = (campaignState == null) ? 0 : campaignState.getVictoryPoints();
-                if (victoryPoints < INDEPENDENT_COMMAND_RIGHTS_REQUIRED_VICTORY_POINTS) {
-                    scenario.setTurningPoint(true);
-                }
+        if (randomInt(3) == 0) {
+            scenario.setTurningPoint(true);
+            if (contract.getCommandRights().isHouse()) {
+                setAttachedUnitsModifier(scenario, contract);
             }
         }
     }
@@ -1587,9 +1572,6 @@ public class StratConRulesManager {
                     facility.setVisible(true);
                     track.addFacility(coords, facility);
                     setupFacilityScenario(scenario, facility);
-                    // A new base belongs on the road grid if the planet's owner holds it, same as one placed at
-                    // contract start.
-                    StratConContractInitializer.connectFacilitiesToRoads(track, contract, campaign);
                 }
             }
         }
@@ -2016,7 +1998,8 @@ public class StratConRulesManager {
         // we want to ensure we only increase Fatigue once
         boolean hasFatigueIncreased = false;
 
-        int scanRangeIncrease = track.getScanRangeIncrease();
+        int trackScanRangeIncrease = track.getScanRangeIncrease();
+        int scanRangeIncrease = trackScanRangeIncrease;
         boolean isTraining = false;
         CombatTeam combatTeam = campaign.getPlayerForce().getCombatTeamsAsMap(campaign).get(forceID);
         if (combatTeam != null) {
@@ -2082,6 +2065,18 @@ public class StratConRulesManager {
             int remainingScans = useAdvancedScouting ? 1 : Integer.MAX_VALUE;
 
             Person scout = scoutData.scout();
+
+            // A scout whose reach the track's jamming has cut to nothing never rolls, so say why
+            if (useAdvancedScouting
+                      && isScoutJammed(scoutData.unitWeight(), scanRangeIncrease, trackScanRangeIncrease)) {
+                campaign.addReport(SKILL_CHECKS, getFormattedTextAt(RESOURCE_BUNDLE,
+                      "StratConRulesManager.scoutingJammed",
+                      getTextAt(RESOURCE_BUNDLE, "StratConRulesManager.scoutingSkillCheck"),
+                      scout.getHyperlinkedFullTitle(),
+                      spanOpeningWithCustomColor(ReportingUtilities.getNegativeColor()),
+                      CLOSING_SPAN_TAG));
+                continue;
+            }
 
             // Per-scout BFS structures
             Queue<Pair<StratConCoords, Integer>> scoutQueue = new LinkedList<>();
@@ -4286,21 +4281,29 @@ public class StratConRulesManager {
     }
 
     /**
-     * Check if the unit's force (if one exists) has been deployed to a StratCon track
+     * Check if the unit's force (if one exists), or any formation above it, has been deployed to a StratCon track. A
+     * formation deployed as a whole takes the units of its sub-formations with it.
      */
     public static boolean isUnitDeployedToStratCon(Unit unit) {
-        if (!unit.getCampaign().getCampaignOptions().isUseStratCon()) {
+        Campaign campaign = unit.getCampaign();
+        if (!campaign.getCampaignOptions().isUseStratCon()) {
             return false;
+        }
+
+        List<Integer> formationIds = new ArrayList<>();
+        formationIds.add(unit.getFormationId());
+
+        Formation formation = campaign.getPlayerForce().getFormation(unit.getFormationId());
+        if (formation != null) {
+            for (Formation parent : formation.getAllParents()) {
+                formationIds.add(parent.getId());
+            }
         }
 
         // this is a little inefficient, but probably there aren't too many active AtB
         // contracts at a time
-        return unit.getCampaign()
-                     .getActiveContracts()
-                     .stream()
-                     .anyMatch(contract -> (contract.getStratConCampaignState() != null) &&
-                                                 contract.getStratConCampaignState()
-                                                       .isForceDeployedHere(unit.getFormationId()));
+        List<AbstractContract> activeContracts = campaign.getActiveContracts();
+        return formationIds.stream().anyMatch(formationId -> isForceDeployedToStratCon(activeContracts, formationId));
     }
 
     public static boolean isForceDeployedToStratCon(List<AbstractContract> activeAtBContracts, int forceId) {
@@ -4650,9 +4653,15 @@ public class StratConRulesManager {
                 }
 
                 // Deliberately does not touch the road network. Roads are laid when the sector is generated, and
-                // afterwards only when a GM edits the map - adding or removing a city or a facility. Resolving a
-                // scenario is playing on the map, not editing it: taking a base, or losing one, changes who holds
-                // the ground at the end of a road, not whether the road was ever built.
+                // afterwards only when a GM edits the map - its terrain or its cities. Resolving a scenario is playing
+                // on the map, not editing it: taking a base, or losing one, changes who holds the ground at the end of
+                // a road, not whether the road was ever built. Who holds it does decide where supply can go, though,
+                // so the supply routes, and which facilities they leave cut off, are brought up to date at once rather
+                // than the next day.
+                if (StratConFacilitySupply.isSupplyLinesActive(campaign)) {
+                    StratConFacilitySupply.reconcileNetworks(track);
+                    StratConFacilitySupply.refreshCutOffFacilities(track, campaign);
+                }
 
                 processTrackForceReturnDates(track, campaign);
 
@@ -4933,6 +4942,69 @@ public class StratConRulesManager {
     }
 
     /**
+     * Whether a deployed formation may be recalled from the Area of Operations early, at the cost of Employer Support.
+     *
+     * <p>A formation committed to a scenario must see it through, and one carrying out a facility order stays until
+     * that order is completed or lifted.</p>
+     *
+     * @param forceID       the deployed formation's ID
+     * @param track         the track it is deployed to
+     * @param campaignState the contract's StratCon state, which holds the Employer Support
+     * @param campaign      the current campaign
+     *
+     * @return {@code true} if the formation can be recalled now
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public static boolean canRecallFormation(int forceID, StratConTrackState track,
+          StratConCampaignState campaignState, Campaign campaign) {
+        if (!track.getAssignedForceCoords().containsKey(forceID)) {
+            return false;
+        }
+
+        if (campaignState.getSupportPoints() < RECALL_FORMATION_SUPPORT_POINT_COST) {
+            return false;
+        }
+
+        if (track.getFacilityOrder(forceID) != null) {
+            return false;
+        }
+
+        Formation formation = campaign.getPlayerForce().getFormation(forceID);
+        return (formation != null) && !formation.isDeployed();
+    }
+
+    /**
+     * Spends Employer Support to have a deployed formation return from the Area of Operations at once, rather than
+     * waiting for its return date. Does nothing if {@link #canRecallFormation} does not allow it.
+     *
+     * @param forceID       the deployed formation's ID
+     * @param track         the track it is deployed to
+     * @param campaignState the contract's StratCon state, which pays the Employer Support
+     * @param campaign      the current campaign
+     *
+     * @return {@code true} if the formation was recalled
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public static boolean recallFormation(int forceID, StratConTrackState track, StratConCampaignState campaignState,
+          Campaign campaign) {
+        if (!canRecallFormation(forceID, track, campaignState, campaign)) {
+            return false;
+        }
+
+        campaignState.changeSupportPoints(-RECALL_FORMATION_SUPPORT_POINT_COST);
+        // With no facility order holding it, this also clears any instruction to remain deployed
+        track.unassignFormation(forceID);
+
+        campaign.addReport(BATTLE, getFormattedTextAt(RESOURCE_BUNDLE, "StratConRulesManager.formationRecalled",
+              campaign.getPlayerForce().getFormation(forceID).getName(), RECALL_FORMATION_SUPPORT_POINT_COST));
+        return true;
+    }
+
+    /**
      * Whether a formation told to Remain Deployed is a patrol that keeps scouting until its area is fully scouted,
      * instead of staying in place until recalled.
      *
@@ -5044,6 +5116,29 @@ public class StratConRulesManager {
      */
     static int getIndividualScanRange(double unitWeight, int scanRangeIncrease, boolean useAdvancedScouting) {
         return useAdvancedScouting && unitWeight <= 35 ? scanRangeIncrease + 1 : scanRangeIncrease;
+    }
+
+    /**
+     * Whether a scout has been jammed out of scouting entirely under Advanced Scouting: the track's scan range
+     * penalties, such as a hostile Jamming Station, leave it unable to reach any hex past its formation's own, when it
+     * could have reached at least one without them.
+     *
+     * @param unitWeight             the weight of the scout's unit, in tons
+     * @param scanRangeIncrease      the formation's scan range, including the track's penalties
+     * @param trackScanRangeIncrease the track's own change to scan range, included in {@code scanRangeIncrease}
+     *
+     * @return {@code true} if the scout can't scout any hex because of the track's scan range penalties
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    static boolean isScoutJammed(double unitWeight, int scanRangeIncrease, int trackScanRangeIncrease) {
+        if (trackScanRangeIncrease >= 0 || getIndividualScanRange(unitWeight, scanRangeIncrease, true) > 0) {
+            return false;
+        }
+
+        int unjammedScanRangeIncrease = scanRangeIncrease - trackScanRangeIncrease;
+        return getIndividualScanRange(unitWeight, unjammedScanRangeIncrease, true) > 0;
     }
 
     /**

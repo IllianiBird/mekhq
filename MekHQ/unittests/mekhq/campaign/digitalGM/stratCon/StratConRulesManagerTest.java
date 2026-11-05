@@ -60,6 +60,7 @@ import mekhq.campaign.CurrentLocation;
 import mekhq.campaign.campaignOptions.CampaignOption;
 import mekhq.campaign.campaignOptions.CampaignOptions;
 import mekhq.campaign.digitalGM.stratCon.StratConContractDefinition.StrategicObjectiveType;
+import mekhq.campaign.digitalGM.stratCon.facility.FacilityOperation;
 import mekhq.campaign.digitalGM.stratCon.facility.StratConFacility;
 import mekhq.campaign.digitalGM.stratCon.facility.StratConFacility.FacilityType;
 import mekhq.campaign.digitalGM.stratCon.facility.StratConFacilityEffects.LocalModifiersEffect;
@@ -94,6 +95,7 @@ import mekhq.campaign.universe.Planet;
 import mekhq.gui.dialog.StratConAmbushedDialog;
 import mekhq.utilities.EntityUtilities;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -1827,6 +1829,25 @@ class StratConRulesManagerTest {
                   StratConRulesManager.getIndividualScanRange(unitWeight, scanRangeIncrease, useAdvancedScouting));
         }
 
+        @ParameterizedTest
+        @CsvSource({
+              // a heavy patrol scout under a -1 jammer: range 0 instead of 1
+              "50.0, 0, -1, true",
+              // a light patrol scout under the same jammer still reaches one hex
+              "35.0, 0, -1, false",
+              // a heavy scout with no jamming and no patrol never reached past its hex anyway
+              "50.0, 0, 0, false",
+              // a heavy non-patrol scout under a jammer couldn't reach past its hex without it either
+              "50.0, -1, -1, false",
+              // a light non-patrol scout under a jammer loses the one hex it would have reached
+              "35.0, -1, -1, true"
+        })
+        void isScoutJammed_onlyWhenJammingTakesAwayEveryHexTheScoutCouldReach(double unitWeight,
+              int scanRangeIncrease, int trackScanRangeIncrease, boolean expectedJammed) {
+            assertEquals(expectedJammed,
+                  StratConRulesManager.isScoutJammed(unitWeight, scanRangeIncrease, trackScanRangeIncrease));
+        }
+
         @Test
         void isAreaFullyScouted_trueWhenEveryHexInRadiusIsRevealed() {
             setUp(true, 0);
@@ -2334,6 +2355,82 @@ class StratConRulesManagerTest {
                 verify(crewMember, never()).changeFatigue(anyInt());
                 fatigue.verifyNoInteractions();
             }
+        }
+    }
+
+    @Nested
+    class RecallFormation {
+        private static final int FORCE_ID = 11;
+        private static final StratConCoords COORDS = new StratConCoords(2, 2);
+        private static final LocalDate TODAY = LocalDate.of(3025, 1, 1);
+
+        private Campaign campaign;
+        private Formation formation;
+        private StratConTrackState track;
+        private StratConCampaignState campaignState;
+
+        @BeforeEach
+        void setUp() {
+            campaign = MHQTestUtilities.mockCampaign();
+            formation = mock(Formation.class);
+            when(formation.getName()).thenReturn("Alpha Lance");
+            when(formation.isDeployed()).thenReturn(false);
+            when(campaign.getPlayerForce().getFormation(FORCE_ID)).thenReturn(formation);
+
+            track = new StratConTrackState();
+            track.assignForce(FORCE_ID, COORDS, TODAY, true);
+
+            campaignState = new StratConCampaignState();
+            campaignState.setSupportPoints(3);
+        }
+
+        @Test
+        void recallFormation_spendsSupportAndUndeploys() {
+            assertTrue(StratConRulesManager.recallFormation(FORCE_ID, track, campaignState, campaign));
+
+            assertEquals(3 - StratConRulesManager.RECALL_FORMATION_SUPPORT_POINT_COST,
+                  campaignState.getSupportPoints());
+            assertFalse(track.getAssignedForceCoords().containsKey(FORCE_ID));
+            assertFalse(track.getAssignedForceReturnDates().containsKey(FORCE_ID));
+            assertFalse(track.getStickyForces().contains(FORCE_ID));
+            verify(campaign).addReport(any(), anyString());
+        }
+
+        @Test
+        void recallFormation_assignedToScenario_isRefused() {
+            when(formation.isDeployed()).thenReturn(true);
+
+            assertFalse(StratConRulesManager.canRecallFormation(FORCE_ID, track, campaignState, campaign));
+            assertFalse(StratConRulesManager.recallFormation(FORCE_ID, track, campaignState, campaign));
+            assertEquals(3, campaignState.getSupportPoints());
+            assertTrue(track.getAssignedForceCoords().containsKey(FORCE_ID));
+        }
+
+        @Test
+        void recallFormation_withoutEmployerSupport_isRefused() {
+            campaignState.setSupportPoints(0);
+
+            assertFalse(StratConRulesManager.recallFormation(FORCE_ID, track, campaignState, campaign));
+            assertEquals(0, campaignState.getSupportPoints());
+            assertTrue(track.getAssignedForceCoords().containsKey(FORCE_ID));
+        }
+
+        @Test
+        void recallFormation_carryingFacilityOrder_isRefused() {
+            track.addFacilityOrder(new StratConFacilityOrder(FacilityOperation.SIEGE, FORCE_ID, COORDS,
+                  TODAY.plusDays(7), null));
+
+            assertFalse(StratConRulesManager.recallFormation(FORCE_ID, track, campaignState, campaign));
+            assertEquals(3, campaignState.getSupportPoints());
+            assertTrue(track.getAssignedForceCoords().containsKey(FORCE_ID));
+        }
+
+        @Test
+        void recallFormation_notDeployedToTrack_isRefused() {
+            track.unassignFormation(FORCE_ID);
+
+            assertFalse(StratConRulesManager.recallFormation(FORCE_ID, track, campaignState, campaign));
+            assertEquals(3, campaignState.getSupportPoints());
         }
     }
 }

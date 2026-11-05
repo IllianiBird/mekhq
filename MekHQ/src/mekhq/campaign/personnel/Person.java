@@ -1869,7 +1869,9 @@ public class Person implements ILocatable {
                 campaign.getPlayerForce().getHumanResources().getProcreation().birth(campaign, getDueDate(), this);
             }
         } else {
-            setDoctorId(null, campaign.getCampaignOptions().get(CampaignOption.NATURAL_HEALING_WAITING_PERIOD));
+            if (!status.isInfirmaryEligible()) {
+                setDoctorId(null, campaign.getCampaignOptions().get(CampaignOption.NATURAL_HEALING_WAITING_PERIOD));
+            }
 
             // If we're assigned to a unit, remove us from it
             if (getUnit() != null) {
@@ -5036,7 +5038,7 @@ public class Person implements ILocatable {
                     if (version.isLowerThan(new Version("0.50.10"))) { // <50.10 compatibility handler
                         person.performanceExamScore = parsedReasoning.getExamScore();
                     }
-                } else if ((nodeName.equalsIgnoreCase("reasoning"))) {
+                } else if (nodeName.equalsIgnoreCase("performanceExamScore")) {
                     person.performanceExamScore = MathUtility.parseInt(wn2.getTextContent().trim(), 50);
                 } else if (nodeName.equalsIgnoreCase("personalityDescription")) {
                     person.personalityDescription = wn2.getTextContent();

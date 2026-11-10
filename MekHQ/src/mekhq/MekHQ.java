@@ -80,6 +80,7 @@ import megamek.client.ui.dialogs.gameConnectionDialogs.HostDialog;
 import megamek.client.ui.dialogs.helpDialogs.AutoResolveSimulationLogDialog;
 import megamek.client.ui.preferences.PreferencesNode;
 import megamek.client.ui.preferences.SuitePreferences;
+import megamek.client.ui.util.RefusedConnectionNotifier;
 import megamek.client.ui.util.UIUtil;
 import megamek.common.autoResolve.acar.SimulatedClient;
 import megamek.common.autoResolve.converter.SetupForces;
@@ -575,6 +576,7 @@ public class MekHQ implements GameListener {
 
         try {
             myServer = new Server(password, port, new TWGameManager(), register, metaServer);
+            myServer.setRefusedConnectionHandler(RefusedConnectionNotifier::showHostDialog);
             if (loadSaveGame) {
                 FileDialog f = new FileDialog(campaignGUI.getFrame(), "Load Save Game");
                 f.setDirectory(System.getProperty("user.dir") + "/savegames");

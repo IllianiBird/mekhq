@@ -345,6 +345,12 @@ public class StratConRulesManager {
                 // otherwise, pick a random force from the avail
             } else {
                 Integer randomForceID = getRandomItem(availableForceIDs); // Can be null
+                if (randomForceID == null) {
+                    // Reuse a deployed Maneuver/Frontline team only as a daily scenario seed. Keep busy teams out of
+                    // the available-force list, which also feeds reinforcement assignment.
+                    randomForceID = getRandomItem(getBusyCombatFormationIDs(campaign, contract,
+                          campaign.getPlayerForce().getCombatTeamsAsList(campaign)));
+                }
 
                 // two scenarios on the same coordinates wind up increasing in size
                 if (track.getScenarios().containsKey(scenarioCoords)) {
@@ -675,7 +681,9 @@ public class StratConRulesManager {
         StratConGMs.opForGeneration(campaignOptions).generateOpFor(backingScenario, contract, campaign);
         swapInPlayerUnits(scenario, campaign, FORMATION_NONE);
 
-        if (!autoAssignLances && !scenario.overrideForceAutoAssignment()) {
+        // The player always picks the one formation that answers an Official Challenge, so it never takes a
+        // formation on its own - whatever the caller asked for.
+        if (isCombatChallenge || (!autoAssignLances && !scenario.overrideForceAutoAssignment())) {
             for (int forceID : scenario.getPlayerTemplateForceIDs()) {
                 backingScenario.removeFormation(forceID);
             }
@@ -1121,6 +1129,12 @@ public class StratConRulesManager {
                 if (scenario == null) {
                     return null;
                 }
+
+                // An Official Challenge is moved off the hex these forces hold and answered by one formation of the
+                // player's choosing, so none of the other forces here are drawn into it.
+                if (scenario.getBackingScenario().getStratConScenarioType().isOfficialChallenge()) {
+                    break;
+                }
             } else {
                 scenario.incrementRequiredPlayerLances();
                 scenario.addPrimaryForce(forceID);
@@ -1342,7 +1356,11 @@ public class StratConRulesManager {
             if (scenario != null) {
                 finalizeBackingScenario(campaign, contract, track, autoAssignLances, scenario);
 
-                if (isAmbushed) {
+                // An Official Challenge never lands on the deployed hex, so the deploying force was not caught by it.
+                boolean isOfficialChallenge = scenario.getBackingScenario()
+                                                    .getStratConScenarioType()
+                                                    .isOfficialChallenge();
+                if (isAmbushed && !isOfficialChallenge) {
                     // Ambushes are always Crisis scenarios, this stop
                     scenario.getBackingScenario().setIsCrisis(true);
                     scenario.setTurningPoint(false);
@@ -1768,9 +1786,15 @@ public class StratConRulesManager {
             return null;
         }
 
+        // A sortie is fought where the besiegers stand, so it can never be an Official Challenge - those never spawn
+        // on an occupied hex.
         ScenarioTemplate template = isSortie ?
-                                          null :
+                                          getRandomNonChallengeScenario(campaign, track, formationId) :
                                           StratConScenarioFactory.getSpecificScenario(SIEGE_RELIEF_SCENARIO_TEMPLATE);
+        if (isSortie && (template == null)) {
+            return null;
+        }
+
         StratConScenario scenario = (template == null) ?
                                           generateScenario(campaign, contract, track, formationId, formationCoords,
                                                 null) :
@@ -2863,18 +2887,24 @@ public class StratConRulesManager {
     }
 
     /**
-     * Utility method to determine if the current scenario's force commander's force is on defence
+     * Utility method to determine if the current scenario's force commander's force is on defence.
+     *
+     * <p>The commander's unit may sit in a child formation (for example a lance inside a company) while the combat team
+     * tag is on a parent formation, so the governing combat team is resolved by walking up the hierarchy rather than by
+     * the commander's own formation alone.</p>
      */
     public static boolean commanderLanceHasDefensiveAssignment(AtBDynamicScenario scenario, Campaign campaign) {
         Person lanceCommander = scenario.getLanceCommander(campaign);
         if (lanceCommander != null) {
             Unit commanderUnit = lanceCommander.getUnit();
             if (commanderUnit != null) {
-                CombatTeam lance = campaign.getPlayerForce()
-                                         .getCombatTeamsAsMap(campaign)
-                                         .get(commanderUnit.getFormationId());
+                Formation commanderFormation = campaign.getPlayerForce().getFormation(commanderUnit.getFormationId());
+                if (commanderFormation == null) {
+                    return false;
+                }
 
-                return (lance != null) && lance.getRole().isFrontline();
+                CombatTeam combatTeam = resolveCombatTeam(commanderFormation, campaign);
+                return (combatTeam != null) && combatTeam.getRole().isFrontline();
             }
         }
 
@@ -3021,6 +3051,38 @@ public class StratConRulesManager {
               false,
               false,
               allowedLocations);
+    }
+
+    /**
+     * Selects a random, non-ambush scenario template for a formation, as {@link #getFleetAppropriateRandomScenario}
+     * does, but never an Official Challenge. For fights that must happen on the formation's own hex.
+     *
+     * @param campaign    the current {@link Campaign}
+     * @param track       the track the scenario is for
+     * @param formationId the ID of the formation the scenario is for
+     *
+     * @return a suitable {@link ScenarioTemplate}, or {@code null} if none other than an Official Challenge was rolled
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    private static @Nullable ScenarioTemplate getRandomNonChallengeScenario(Campaign campaign,
+          StratConTrackState track, int formationId) {
+        int unitType = MEK;
+        Formation formation = campaign.getPlayerForce().getFormation(formationId);
+        if (formation != null) {
+            unitType = formation.getPrimaryUnitType(campaign);
+        }
+
+        final int maximumAttempts = 20;
+        for (int attempt = 0; attempt < maximumAttempts; attempt++) {
+            ScenarioTemplate template = getFleetAppropriateRandomScenario(campaign, track, unitType);
+            if ((template != null) && !template.getStratConScenarioType().isOfficialChallenge()) {
+                return template;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -3187,6 +3249,12 @@ public class StratConRulesManager {
     static @Nullable StratConScenario generateScenario(Campaign campaign, AbstractContract contract,
           StratConTrackState track, @Nullable Integer forceID, StratConCoords coords,
           @Nullable ScenarioTemplate template, @Nullable Integer daysTilDeployment) {
+        return generateScenario(campaign, contract, track, forceID, coords, template, daysTilDeployment, false);
+    }
+
+    static @Nullable StratConScenario generateScenario(Campaign campaign, AbstractContract contract,
+          StratConTrackState track, @Nullable Integer forceID, StratConCoords coords,
+          @Nullable ScenarioTemplate template, @Nullable Integer daysTilDeployment, boolean suppressReport) {
         StratConScenario scenario = new StratConScenario();
 
         if (forceID == null) {
@@ -3208,6 +3276,18 @@ public class StratConRulesManager {
         if (template == null) {
             LOGGER.error("Failed to fetch random scenario template. Aborting scenario generation.");
             return null;
+        }
+
+        // An Official Challenge is issued through official channels, not stumbled into: it never spawns on a hex that
+        // is already taken - by a deployed formation, a scenario, a facility, or an occupying point of interest. Move
+        // it to a free hex instead, where the player chooses which formation answers it.
+        if ((coords != null) && template.getStratConScenarioType().isOfficialChallenge()) {
+            coords = getOfficialChallengeCoords(campaign.getCampaignOptions(), track, coords);
+            if (coords == null) {
+                LOGGER.warn("No free hex for an Official Challenge on track {}; skipping scenario generation.",
+                      track.getDisplayableName());
+                return null;
+            }
         }
 
         AtBDynamicScenario backingScenario = AtBDynamicScenarioFactory.initializeScenarioFromTemplate(template,
@@ -3273,9 +3353,7 @@ public class StratConRulesManager {
         // maintained
         // registering the scenario with the campaign should be done after setting
         // dates, otherwise, the report messages for new scenarios look weird
-        // also, suppress the "new scenario" report if not generating a scenario
-        // for a specific force, as this indicates a contract initialization
-        campaign.addScenario(backingScenario, contract, forceID == FORMATION_NONE);
+        campaign.addScenario(backingScenario, contract, suppressReport);
         scenario.setBackingScenarioID(backingScenario.getId());
 
         if (forceID > FORMATION_NONE) {
@@ -3283,6 +3361,51 @@ public class StratConRulesManager {
         }
 
         return scenario;
+    }
+
+    /**
+     * Whether a hex is unfit for an Official Challenge: something already takes it up (a scenario, a facility, or an
+     * occupying point of interest - see {@link StratConTrackState#isHexOccupied}), or a player formation is deployed
+     * there.
+     *
+     * @param track  the track the challenge would be placed on, or {@code null} if it has none
+     * @param coords the hex to test, or {@code null} if the scenario has no position
+     *
+     * @return {@code true} if the challenge must be placed elsewhere
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    /**
+     * Picks the hex an Official Challenge is placed on: the rolled hex if it is free (see
+     * {@link #isOccupiedForOfficialChallenge}), otherwise a free hex chosen by the active GM's OpFor deployment
+     * strategy.
+     *
+     * @param campaignOptions the campaign options, used to consult the active GM
+     * @param track           the track the challenge is placed on
+     * @param coords          the hex the challenge was rolled for, or {@code null} if it has no position
+     *
+     * @return the hex to place the challenge on, or {@code null} if the rolled hex is taken and no free hex exists
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    static @Nullable StratConCoords getOfficialChallengeCoords(CampaignOptions campaignOptions,
+          StratConTrackState track, @Nullable StratConCoords coords) {
+        if (!isOccupiedForOfficialChallenge(track, coords)) {
+            return coords;
+        }
+
+        return StratConGMs.opForDeployment(campaignOptions).getUnoccupiedCoords(track);
+    }
+
+    static boolean isOccupiedForOfficialChallenge(@Nullable StratConTrackState track,
+          @Nullable StratConCoords coords) {
+        if ((track == null) || (coords == null)) {
+            return false;
+        }
+
+        return track.isHexOccupied(coords) || track.getAssignedForceCoords().containsValue(coords);
     }
 
     /**
@@ -3724,6 +3847,8 @@ public class StratConRulesManager {
      *       (unless role restrictions are bypassed).</li>
      * </ul>
      *
+     * <p>Busy formations are never returned; callers that need a seed-only fallback must select one explicitly.</p>
+     *
      * @param campaign               The {@link Campaign} containing data regarding contracts, combat teams, and their
      *                               statuses.
      * @param contract               The {@link AbstractContract} contract for which combat teams are evaluated based on
@@ -3782,17 +3907,49 @@ public class StratConRulesManager {
             }
         }
 
-        if (suitableForces.isEmpty()) {
-            if (!bypassRoleRestrictions) {
-                LOGGER.info("No suitable combat teams found for contract {}. Relaxing restrictions", contract.getId());
-                suitableForces = getAvailableForceIDs(campaign, contract, true);
-            } else {
-                LOGGER.info("No suitable combat teams found for contract {} despite relaxed restrictions." +
-                                  " Scenario generation will likely be skipped.", contract.getId());
-            }
+        if (suitableForces.isEmpty() && !bypassRoleRestrictions) {
+            LOGGER.info("No suitable combat teams found for contract {}. Relaxing restrictions", contract.getId());
+            suitableForces = getAvailableForceIDs(campaign, contract, true);
         }
 
         return suitableForces;
+    }
+
+    /**
+     * Retrieves the force IDs of combat teams on the contract that are already assigned to a scenario and hold a combat
+     * role ({@link CombatRole#MANEUVER} or {@link CombatRole#FRONTLINE}). These stand in for available forces when no
+     * idle combat team can be found, so that a scenario can still be generated.
+     *
+     * @param campaign    the current campaign
+     * @param contract    the contract the combat teams must be assigned to
+     * @param combatTeams all combat teams in the campaign
+     *
+     * @return the force IDs of busy combat formations on the contract; empty if there are none
+     */
+    private static List<Integer> getBusyCombatFormationIDs(Campaign campaign, AbstractContract contract,
+          List<CombatTeam> combatTeams) {
+        List<Integer> busyCombatFormations = new ArrayList<>();
+        for (CombatTeam combatTeam : combatTeams) {
+            if (!contract.equals(combatTeam.getContract(campaign))) {
+                continue;
+            }
+
+            Formation formation = combatTeam.getFormation(campaign);
+            if ((formation == null) || !formation.isDeployed()) {
+                continue;
+            }
+
+            if (SupportCarrierDeployment.deploysNothing(campaign, formation, null)) {
+                continue;
+            }
+
+            CombatRole combatRole = combatTeam.getRole();
+            if ((combatRole != null) && (combatRole.isManeuver() || combatRole.isFrontline())) {
+                busyCombatFormations.add(combatTeam.getFormationId());
+            }
+        }
+
+        return busyCombatFormations;
     }
 
     /**
@@ -4189,7 +4346,28 @@ public class StratConRulesManager {
      */
     public static List<Unit> getEligibleLeadershipUnits(Campaign campaign, StratConScenario currentScenario,
           int leadershipSkill) {
-        List<Integer> forceIds = currentScenario.getPrimaryForceIDs();
+        return getEligibleLeadershipUnits(campaign, currentScenario, leadershipSkill,
+              currentScenario.getPrimaryForceIDs());
+    }
+
+    /**
+     * Retrieves a list of units that are eligible for leadership deployment, matching them against the supplied
+     * primary formations rather than the scenario's committed primary forces. The deployment wizard uses this before
+     * commit, when the staged primary has not yet been written to the scenario and its primary force list is still
+     * empty.
+     *
+     * @param campaign        The campaign instance holding the units and forces involved.
+     * @param currentScenario The current StratCon scenario being processed.
+     * @param leadershipSkill The leadership skill value used to calculate budget.
+     * @param primaryForceIds The formation IDs whose dominant unit type the leadership units must match.
+     *
+     * @return A list of {@code Unit} objects eligible for deployment as leadership units.
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public static List<Unit> getEligibleLeadershipUnits(Campaign campaign, StratConScenario currentScenario,
+          int leadershipSkill, List<Integer> primaryForceIds) {
         List<Unit> leadershipUnits = new ArrayList<>();
 
         // If there is no leadership skill, we shouldn't continue
@@ -4199,7 +4377,7 @@ public class StratConRulesManager {
 
         int totalBudget = min(BASE_LEADERSHIP_BUDGET * leadershipSkill, BASE_LEADERSHIP_BUDGET * 5);
 
-        int primaryUnitType = getPrimaryUnitType(campaign, forceIds);
+        int primaryUnitType = getPrimaryUnitType(campaign, primaryForceIds);
 
         // If there are no units (somehow), we've no reason to continue
         if (primaryUnitType == -1) {

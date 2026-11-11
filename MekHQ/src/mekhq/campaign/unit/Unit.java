@@ -71,6 +71,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import javax.swing.UIManager;
@@ -101,6 +102,7 @@ import megamek.common.icons.Camouflage;
 import megamek.common.interfaces.ILocationExposureStatus;
 import megamek.common.interfaces.ITechnology;
 import megamek.common.loaders.MekSummary;
+import megamek.common.loaders.MekSummaryCache;
 import megamek.common.options.IOption;
 import megamek.common.options.IOptionGroup;
 import megamek.common.options.OptionsConstants;
@@ -169,6 +171,7 @@ import mekhq.campaign.personnel.skills.SkillModifierData;
 import mekhq.campaign.personnel.skills.SkillType;
 import mekhq.campaign.personnel.turnoverAndRetention.Fatigue;
 import mekhq.campaign.unit.enums.CrewAssignmentState;
+import mekhq.campaign.unit.enums.CrewSeat;
 import mekhq.campaign.unit.enums.TransporterType;
 import mekhq.campaign.utilities.CampaignTransportUtilities;
 import mekhq.campaign.work.IAcquisitionWork;
@@ -3257,7 +3260,7 @@ public class Unit implements ITechnology, ILocatable {
     /**
      * Estimates what {@link #getBuyCost()} will return for an entity that has not yet been made into a unit, such as
      * one rolled by the command generator. When the {@link CampaignOption#UNIT_COST_MODEL} values the entity by Battle
-     * Value, it is valued in its current state, exactly as {@link #getAlternateUnitCost()} values a unit.
+     * Value, it is valued by its base Battle Value, exactly as {@link #getAlternateUnitCost()} values a unit.
      *
      * @param unitEntity      the entity to price
      * @param campaignOptions the campaign options supplying the pricing rules and multipliers
@@ -3269,7 +3272,7 @@ public class Unit implements ITechnology, ILocatable {
      */
     public static Money estimateBuyCost(Entity unitEntity, CampaignOptions campaignOptions) {
         if (campaignOptions.get(CampaignOption.UNIT_COST_MODEL).isBattleValueCost(unitEntity)) {
-            return calculateAlternateUnitCost(unitEntity.calculateBattleValue(true, true, true),
+            return calculateAlternateUnitCost(getBaseBattleValue(unitEntity),
                   getUnitPriceMultiplier(unitEntity, campaignOptions), getQuirkPriceMultiplier(unitEntity),
                   campaignOptions);
         }
@@ -3390,46 +3393,86 @@ public class Unit implements ITechnology, ILocatable {
     }
 
     /**
-     * The unit's condition when its Battle Value was last calculated. Battle Value is expensive to work out and unit
-     * value is read constantly (unit tables, finances), so it is only recalculated when the condition changes.
+     * The design whose base Battle Value was last looked up. Unit value is read constantly (unit tables, finances), so
+     * the base Battle Value is only looked up again when the design changes, such as after a refit.
+     *
+     * @author Illiani
+     * @since 0.51.01
      */
-    private record BattleValueCondition(int totalArmor, int totalInternal, int damagedEquipment, int equipmentCount,
-          int battleValue) {}
+    private record DesignBattleValue(String designName, int battleValue) {}
 
-    private transient BattleValueCondition cachedBattleValueCondition;
+    private transient DesignBattleValue cachedDesignBattleValue;
+
+    /** Designs already reported as missing from the unit summaries, so each is only logged once. */
+    private static final Set<String> DESIGNS_MISSING_SUMMARIES = ConcurrentHashMap.newKeySet();
 
     /**
-     * @return the unit's Battle Value in its current condition, excluding pilot skill, C3, and TAG
+     * @return the unit's base Battle Value (see {@link #getBaseBattleValue(Entity)})
      *
      * @author Illiani
      * @since 0.51.01
      */
     private int getUnitBattleValue() {
         Entity unitEntity = getEntity();
-        int totalArmor = unitEntity.getTotalArmor();
-        int totalInternal = unitEntity.getTotalInternal();
-        int damagedEquipment = 0;
-        int equipmentCount = 0;
-        for (Mounted<?> mounted : unitEntity.getEquipment()) {
-            equipmentCount++;
-            if (mounted.isDestroyed() || mounted.isHit() || mounted.isMissing()) {
-                damagedEquipment++;
-            }
-        }
-
-        BattleValueCondition cached = cachedBattleValueCondition;
-        if (cached != null
-                  && cached.totalArmor() == totalArmor
-                  && cached.totalInternal() == totalInternal
-                  && cached.damagedEquipment() == damagedEquipment
-                  && cached.equipmentCount() == equipmentCount) {
+        String designName = unitEntity.getShortNameRaw();
+        DesignBattleValue cached = cachedDesignBattleValue;
+        if ((cached != null) && cached.designName().equals(designName)) {
             return cached.battleValue();
         }
 
-        int battleValue = unitEntity.calculateBattleValue(true, true, true);
-        cachedBattleValueCondition = new BattleValueCondition(totalArmor, totalInternal, damagedEquipment,
-              equipmentCount, battleValue);
-        return battleValue;
+        MekSummary summary = findDesignSummary(designName);
+        if (summary == null) {
+            // Not cached, so the base Battle Value is used as soon as the design's summary can be found
+            return unitEntity.calculateBattleValue(true, true, true);
+        }
+
+        cachedDesignBattleValue = new DesignBattleValue(designName, summary.getBV());
+        return summary.getBV();
+    }
+
+    /**
+     * Gets an entity's base Battle Value: that of its design as loaded from file, so damage, lost armor, and destroyed
+     * equipment do not lower it. Pilot skill and C3 are excluded. This is the same Battle Value the Purchase Unit
+     * dialog and the unit market price units by.
+     *
+     * <p>If the design's summary is unavailable (see {@link #findDesignSummary(String)}), the entity's Battle Value is
+     * calculated from its current state instead.</p>
+     *
+     * @param unitEntity the entity to value
+     *
+     * @return the entity's base Battle Value
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    static int getBaseBattleValue(Entity unitEntity) {
+        MekSummary summary = findDesignSummary(unitEntity.getShortNameRaw());
+        return (summary == null) ? unitEntity.calculateBattleValue(true, true, true) : summary.getBV();
+    }
+
+    /**
+     * Finds a design's summary without waiting for the {@link MekSummaryCache}: while the cache is loading (at startup,
+     * or reloading after a refit or a MegaMekLab save), waiting would freeze the caller, which is often the UI.
+     *
+     * @param designName the design's raw short name
+     *
+     * @return the design's summary, or {@code null} if the cache is still loading or does not hold the design
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    private static @Nullable MekSummary findDesignSummary(String designName) {
+        MekSummaryCache summaryCache = MekSummaryCache.getInstance();
+        if (!summaryCache.isInitialized()) {
+            return null;
+        }
+
+        MekSummary summary = summaryCache.getMek(designName);
+        if ((summary == null) && DESIGNS_MISSING_SUMMARIES.add(designName)) {
+            LOGGER.warn("No unit summary found for {}; valuing it by its current Battle Value instead of its base "
+                              + "Battle Value.", designName);
+        }
+        return summary;
     }
 
     /**
@@ -3437,9 +3480,9 @@ public class Unit implements ITechnology, ILocatable {
      * Battle Value, converted to C-bills when support point conversion is enabled, then adjusted by the unit price
      * multiplier for the unit's tech base.
      *
-     * <p>Battle Value is calculated from the unit's current state, so damage, lost armor, and destroyed equipment
-     * lower it. Pilot skill, C3 networks, and TAG are excluded, since they depend on the crew and force rather than the
-     * unit itself.</p>
+     * <p>The unit's base Battle Value is used (see {@link #getBaseBattleValue(Entity)}), so damage, lost armor, and
+     * destroyed equipment do not lower it. Pilot skill, C3 networks, and TAG are excluded, since they depend on the
+     * crew and force rather than the unit itself.</p>
      *
      * <p>Quirks that affect a unit's traditional price, such as Good Reputation, affect this value too (see
      * {@link #getQuirkPriceMultiplier(Entity)}).</p>
@@ -7126,15 +7169,37 @@ public class Unit implements ITechnology, ILocatable {
     }
 
     public boolean canTakeNavigator() {
-        return entity instanceof Jumpship && !(entity instanceof SpaceStation) && (navigator == null);
+        return hasNavigatorSeat() && (navigator == null);
+    }
+
+    /**
+     * @return {@code true} if this unit has a navigator seat, filled or not: a JumpShip or WarShip, but not a space
+     *       station
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean hasNavigatorSeat() {
+        return entity instanceof Jumpship && !(entity instanceof SpaceStation);
     }
 
     public boolean canTakeTechOfficer() {
-        return (techOfficer == null) && (entity.getCrew().getCrewType().getTechPos() >= 0
-                                               // Use techOfficer field for secondary commander
-                                               ||
-                                               (entity instanceof Tank &&
-                                                      entity.hasWorkingMisc(MiscType.F_COMMAND_CONSOLE)));
+        return (techOfficer == null) && hasTechOfficerSeat();
+    }
+
+    /**
+     * Whether this unit has a seat held in the {@code techOfficer} field, filled or not. That is a cockpit tech
+     * officer position, or, on a vehicle with a working command console, the console's secondary commander.
+     *
+     * @return {@code true} if this unit has a tech officer or console commander seat
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean hasTechOfficerSeat() {
+        return (entity.getCrew().getCrewType().getTechPos() >= 0)
+                     // Use techOfficer field for secondary commander
+                     || ((entity instanceof Tank) && entity.hasWorkingMisc(MiscType.F_COMMAND_CONSOLE));
     }
 
     public boolean canTakeTech() {
@@ -7502,7 +7567,8 @@ public class Unit implements ITechnology, ILocatable {
             return;
         }
         ensurePersonIsRegistered(person);
-        final boolean hadFreeSeat = hasFreeSeatFor(getDriverRole());
+        final PersonnelRole seatRole = getDriverRole();
+        final boolean hadFreeSeat = hasFreeSeatFor(seatRole);
         drivers.add(person);
         // Multi-crew cockpits should not set the pilot to the gunner position
         if (entity.getCrew().getCrewType().getPilotPos() == entity.getCrew().getCrewType().getGunnerPos()) {
@@ -7510,8 +7576,10 @@ public class Unit implements ITechnology, ILocatable {
         }
         person.setUnit(this);
 
-        // Replace one temp crew member only if the real Person took a seat that was already filled
-        releaseTempCrewForAssignedRole(person.getPrimaryRole(), hadFreeSeat);
+        // Replace one temp crew member only if the real Person took a seat that was already filled. The temp crew
+        // released are those of the seat, not of the person's primary role: someone who serves here through their
+        // secondary role still replaces one of this unit's temp crew.
+        releaseTempCrewForAssignedRole(seatRole, hadFreeSeat);
 
         if (useTransfers) {
             AssignmentLogger.reassignedTo(person, getCampaign().getLocalDate(), getName());
@@ -7590,6 +7658,90 @@ public class Unit implements ITechnology, ILocatable {
                   person,
                   getCampaign().getLocalDate(),
                   campaign1.getPlayerForce().getFormationFor(this));
+        }
+    }
+
+    /**
+     * Finds the crew seat a person holds in this unit.
+     *
+     * @param person the person to look for
+     *
+     * @return the seat they hold, or {@code null} if they do not crew this unit
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public @Nullable CrewSeat getCrewSeat(final @Nullable Person person) {
+        if (person == null) {
+            return null;
+        }
+
+        if (person.equals(techOfficer)) {
+            return CrewSeat.TECH_OFFICER;
+        }
+
+        if (person.equals(navigator)) {
+            return CrewSeat.NAVIGATOR;
+        }
+
+        // addPilotOrSoldier puts the person in both lists whenever the cockpit has one position for both jobs
+        boolean isDriver = drivers.contains(person);
+        boolean isGunner = gunners.contains(person);
+        if (isDriver && isGunner) {
+            return CrewSeat.PILOT_OR_SOLDIER;
+        } else if (isDriver) {
+            return CrewSeat.DRIVER;
+        } else if (isGunner) {
+            return CrewSeat.GUNNER;
+        }
+
+        if (vesselCrew.contains(person)) {
+            return CrewSeat.VESSEL_CREW;
+        }
+
+        return null;
+    }
+
+    /**
+     * Checks whether this unit has room for one more person in the given seat.
+     *
+     * @param crewSeat the seat to check
+     *
+     * @return {@code true} if the seat is open
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public boolean hasOpenCrewSeat(final CrewSeat crewSeat) {
+        return switch (crewSeat) {
+            case PILOT_OR_SOLDIER -> usesSoldiers() ? canTakeMoreGunners() : canTakeMoreDrivers();
+            case DRIVER -> canTakeMoreDrivers();
+            case GUNNER -> canTakeMoreGunners();
+            case VESSEL_CREW -> canTakeMoreVesselCrew();
+            case NAVIGATOR -> canTakeNavigator();
+            case TECH_OFFICER -> canTakeTechOfficer();
+        };
+    }
+
+    /**
+     * Seats a person in the given crew seat of this unit, using the same assignment method the seat was filled with.
+     *
+     * <p>This does not check that the seat is open; see {@link #hasOpenCrewSeat(CrewSeat)}.</p>
+     *
+     * @param person   the person to seat
+     * @param crewSeat the seat to give them
+     *
+     * @author Illiani
+     * @since 0.51.01
+     */
+    public void addToCrewSeat(final Person person, final CrewSeat crewSeat) {
+        switch (crewSeat) {
+            case PILOT_OR_SOLDIER -> addPilotOrSoldier(person);
+            case DRIVER -> addDriver(person);
+            case GUNNER -> addGunner(person);
+            case VESSEL_CREW -> addVesselCrew(person);
+            case NAVIGATOR -> setNavigator(person);
+            case TECH_OFFICER -> setTechOfficer(person);
         }
     }
 
